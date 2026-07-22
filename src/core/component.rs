@@ -76,21 +76,46 @@ impl ComponentTemplate {
         }
     }
 
+    /// Export the I/O declaration (used for introspection and automatic wiring).
+    pub fn export_io(&self) -> IODeclaration {
+        self.io.clone()
+    }
+
     /// Build a ComponentInstance from this template.
     pub fn instantiate(
         &self,
         id: &str,
-        _param_overrides: &HashMap<String, SignalValue>,
+        param_overrides: &HashMap<String, SignalValue>,
     ) -> Result<ComponentInstance, SimError> {
         let external_ports = self.io.to_port_set();
 
+        // Copy the internal diagram so each instance has its own blocks.
+        let mut instance_diagram = self.internal_diagram.clone_diagram();
+
+        // Apply parameter overrides through the parameter_mappings.
         let mut params = ParameterSet::new();
         for ext_param in self.parameter_mappings.keys() {
+            let value = param_overrides
+                .get(ext_param)
+                .cloned()
+                .unwrap_or(SignalValue::None);
             params.add(Parameter::new_config(
                 ext_param,
-                SignalValue::None,
+                value,
                 &format!("mapped parameter: {}", ext_param),
             ));
+        }
+
+        // Apply overrides to internal blocks' parameters.
+        for (ext_name, internal_path) in &self.parameter_mappings {
+            if let Some(override_value) = param_overrides.get(ext_name) {
+                // internal_path format: "block_id.param_name"
+                if let Some((block_id, param_name)) = internal_path.split_once('.')
+                    && let Some(block) = instance_diagram.get_block_mut(block_id)
+                {
+                    block.params_mut().set(param_name, override_value.clone());
+                }
+            }
         }
 
         Ok(ComponentInstance {
@@ -98,7 +123,7 @@ impl ComponentTemplate {
             block_type: self.name.clone(),
             io: self.io.clone(),
             port_mappings: self.port_mappings.clone(),
-            instance_diagram: Diagram::new(&format!("{}_instance", id)),
+            instance_diagram,
             external_ports,
             params,
             status: ComponentStatus::Inactive,
@@ -236,6 +261,20 @@ impl Block for ComponentInstance {
         Ok(())
     }
 
+    fn clone_block(&self) -> Box<dyn Block> {
+        Box::new(Self {
+            id: self.id.clone(),
+            block_type: self.block_type.clone(),
+            io: self.io.clone(),
+            port_mappings: self.port_mappings.clone(),
+            instance_diagram: self.instance_diagram.clone_diagram(),
+            external_ports: self.external_ports.clone(),
+            params: self.params.clone(),
+            status: self.status,
+            current_time: self.current_time,
+        })
+    }
+
     fn validate_configuration(&self) -> Result<(), Vec<String>> {
         let mut errors = Vec::new();
         for input in &self.io.inputs {
@@ -304,5 +343,49 @@ mod tests {
         assert_eq!(instance.id(), "amp1");
         assert!(instance.ports().get("ext_in").is_some());
         assert!(instance.ports().get("ext_out").is_some());
+    }
+
+    #[test]
+    fn test_component_export_io() {
+        let mut io = IODeclaration::new();
+        io.add_input(InputDecl::new("in1", SignalType::Continuous));
+        io.add_output(OutputDecl::new("out1", SignalType::Continuous));
+        let template = ComponentTemplate::new("export_test", io);
+        let exported = template.export_io();
+        assert!(exported.has_input("in1"));
+        assert!(exported.has_output("out1"));
+        assert_eq!(exported.input_count(), 1);
+        assert_eq!(exported.output_count(), 1);
+    }
+
+    #[test]
+    fn test_component_instance_has_internal_blocks() {
+        let mut io = IODeclaration::new();
+        io.add_input(InputDecl::new("ext_in", SignalType::Continuous));
+        io.add_output(OutputDecl::new("ext_out", SignalType::Continuous));
+
+        let mut template = ComponentTemplate::new("nested", io);
+        let mut src = SimpleBlock::new("src", "Source");
+        src.declare_output("out", SignalType::Continuous);
+        let mut sink = SimpleBlock::new("sink", "Sink");
+        sink.declare_input("in", SignalType::Continuous);
+
+        template.internal_diagram.add_block(Box::new(src));
+        template.internal_diagram.add_block(Box::new(sink));
+        template.internal_diagram.add_link(Link::new("l1", "src", "out", "sink", "in"));
+        template.internal_diagram.compute_execution_order();
+
+        template.map_port("ext_in", "sink", "in");
+        template.map_port("ext_out", "src", "out");
+
+        let params = HashMap::new();
+        let mut instance = template.instantiate("n1", &params).unwrap();
+
+        // Verify the instance can execute (would fail if internal diagram empty)
+        instance.init().unwrap();
+        instance.output().unwrap();
+        instance.update().unwrap();
+        instance.terminate().unwrap();
+        assert_eq!(instance.status(), ComponentStatus::Completed);
     }
 }

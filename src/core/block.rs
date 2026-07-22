@@ -120,10 +120,14 @@ pub trait Block: Send + Sync {
             ExecutionPhase::Terminate => self.terminate(),
         }
     }
+
+    /// Clone this block into a boxed trait object.
+    /// Required for hierarchical component instantiation.
+    fn clone_block(&self) -> Box<dyn Block>;
 }
 
 /// A simple concrete block implementation for testing and stateless operations.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SimpleBlock {
     id: BlockId,
     block_type: String,
@@ -149,6 +153,24 @@ impl SimpleBlock {
             state_decl: StateDeclaration::new(),
             dep_set: DependencySet::new(),
         }
+    }
+
+    /// Replace the I/O declaration.
+    pub fn with_io(mut self, decl: IODeclaration) -> Self {
+        self.io_decl = decl;
+        self
+    }
+
+    /// Replace the state declaration.
+    pub fn with_state(mut self, decl: StateDeclaration) -> Self {
+        self.state_decl = decl;
+        self
+    }
+
+    /// Replace the dependency set.
+    pub fn with_dependencies(mut self, deps: DependencySet) -> Self {
+        self.dep_set = deps;
+        self
     }
 
     pub fn add_port(&mut self, port: Port) {
@@ -270,5 +292,68 @@ impl Block for SimpleBlock {
     fn terminate(&mut self) -> Result<(), BlockError> {
         self.status = ComponentStatus::Completed;
         Ok(())
+    }
+
+    fn clone_block(&self) -> Box<dyn Block> {
+        Box::new(SimpleBlock {
+            id: self.id.clone(),
+            block_type: self.block_type.clone(),
+            ports: self.ports.clone(),
+            params: self.params.clone(),
+            status: self.status,
+            current_time: self.current_time,
+            io_decl: self.io_decl.clone(),
+            state_decl: self.state_decl.clone(),
+            dep_set: self.dep_set.clone(),
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::state::{ContinuousStateVar, DiscreteStateVar};
+    use crate::core::types::SignalType;
+
+    #[test]
+    fn test_simple_block_builder_with_io() {
+        let mut io = IODeclaration::new();
+        io.add_input(InputDecl::new("u", SignalType::Continuous));
+        io.add_output(OutputDecl::new("y", SignalType::Continuous));
+        let block = SimpleBlock::new("b1", "Test").with_io(io);
+        assert!(block.io_declaration().has_input("u"));
+        assert!(block.io_declaration().has_output("y"));
+    }
+
+    #[test]
+    fn test_simple_block_builder_with_state() {
+        let mut sd = StateDeclaration::new();
+        sd.add_continuous(ContinuousStateVar::new("x", 0.0));
+        sd.add_discrete(DiscreteStateVar::new("z", SignalValue::Integer(0)));
+        let block = SimpleBlock::new("b2", "TestState").with_state(sd);
+        assert_eq!(block.state_declaration().continuous_count(), 1);
+        assert_eq!(block.state_declaration().discrete_count(), 1);
+    }
+
+    #[test]
+    fn test_simple_block_builder_with_deps() {
+        let mut ds = DependencySet::new();
+        ds.add(DependencyDecl::new("provider", "out", "in"));
+        let block = SimpleBlock::new("b3", "TestDep").with_dependencies(ds);
+        assert_eq!(block.dependencies().len(), 1);
+    }
+
+    #[test]
+    fn test_simple_block_lifecycle() {
+        let mut block = SimpleBlock::new("life", "Lifecycle");
+        assert_eq!(block.status(), ComponentStatus::Inactive);
+
+        block.init().unwrap();
+        assert_eq!(block.status(), ComponentStatus::Ready);
+
+        block.output().unwrap();
+        block.update().unwrap();
+        block.terminate().unwrap();
+        assert_eq!(block.status(), ComponentStatus::Completed);
     }
 }

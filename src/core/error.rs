@@ -128,7 +128,7 @@ impl ErrorCode {
 }
 
 /// A structured simulation error with a numeric code and descriptive message.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SimError {
     /// The error code identifying the category.
     pub code: ErrorCode,

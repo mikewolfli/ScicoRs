@@ -34,6 +34,11 @@ impl TensorDims {
         &self.0
     }
 
+    /// Size of a specific dimension.
+    pub fn dim_size(&self, axis: usize) -> Option<usize> {
+        self.0.get(axis).copied()
+    }
+
     pub fn ndim(&self) -> usize {
         self.0.len()
     }
@@ -241,6 +246,11 @@ impl Tensor {
             None
         }
     }
+
+    /// Map multi-dimensional indices to a flat storage index.
+    pub fn flat_index(&self, indices: &[usize]) -> Option<usize> {
+        self.dims.flat_index(indices)
+    }
 }
 
 #[cfg(test)]
@@ -301,4 +311,18 @@ mod tests {
         assert_eq!(d.flat_index(&[2, 3]), Some(11));
         assert_eq!(d.flat_index(&[3, 0]), None); // out of bounds
     }
-}
+
+    #[test]
+    fn test_tensor_dim_size() {
+        let d = TensorDims::new(vec![3, 4, 5]);
+        assert_eq!(d.dim_size(0), Some(3));
+        assert_eq!(d.dim_size(1), Some(4));
+        assert_eq!(d.dim_size(2), Some(5));
+        assert_eq!(d.dim_size(3), None); // out of bounds
+    }
+    #[test]
+    fn test_tensor_flat_index_convenience() {
+        let t = Tensor::from_vec(TensorDims::matrix(2, 3), vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+        assert_eq!(t.flat_index(&[1, 1]), Some(4));
+        assert_eq!(t.flat_index(&[2, 0]), None);
+    }}

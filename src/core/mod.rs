@@ -1,7 +1,10 @@
-//! Core Model Kernel
+//! Core Data Model Layer
 //!
-//! The foundational layer of the simulation kernel. Defines the
-//! basic building blocks for constructing simulation models:
+//! The foundational data-model layer of the simulation kernel. Defines the
+//! basic building blocks for constructing simulation models — the "nouns"
+//! that describe what a simulation IS.
+//!
+//! Runtime execution (how a simulation RUNS) lives in the `runtime` module.
 //!
 //! - **Block**: the fundamental functional simulation unit
 //! - **Port**: input/output interfaces on blocks
@@ -17,9 +20,12 @@
 //! - **Component**: reusable component template system
 //! - **DiagramSer**: JSON/TOML serialization
 //! - **DiagramValidate**: diagram validation rules
+//! - **Coord** (Phase 10): coordinate systems (empty placeholder)
+//! - **Units** (Phase 11): units & dimensions (empty placeholder)
 
 pub mod block;
 pub mod component;
+pub mod coord;
 pub mod dependency;
 pub mod diagram;
 pub mod diagram_ser;
@@ -33,6 +39,7 @@ pub mod signal;
 pub mod state;
 pub mod tensor;
 pub mod types;
+pub mod units;
 
 pub use block::{Block, BlockError, SimpleBlock};
 pub use component::{ComponentInstance, ComponentTemplate};

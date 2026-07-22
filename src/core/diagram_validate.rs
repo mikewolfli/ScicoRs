@@ -86,6 +86,25 @@ pub fn validate_diagram(diagram: &Diagram) -> ValidationResult {
         }
     }
 
+    // 5b. Check signal type compatibility between linked ports.
+    for link in diagram.links().iter() {
+        let src_type = diagram.get_block(&link.source.0)
+            .and_then(|b| b.ports().get(&link.source.1))
+            .map(|p| p.signal_type);
+        let dst_type = diagram.get_block(&link.destination.0)
+            .and_then(|b| b.ports().get(&link.destination.1))
+            .map(|p| p.signal_type);
+        if let (Some(src), Some(dst)) = (src_type, dst_type)
+            && src != dst
+        {
+            errors.push(SimError::new(
+                ErrorCode::SignalTypeMismatchLink,
+                format!("signal type mismatch on link '{}': source '{}' is {:?}, destination '{}' is {:?}",
+                    link.id, link.source.1, src, link.destination.1, dst),
+            ));
+        }
+    }
+
     // 6. Check for cycles.
     let topo = diagram.links().topological_sort();
     if topo.is_none() {
@@ -119,6 +138,18 @@ pub fn validate_diagram(diagram: &Diagram) -> ValidationResult {
             });
             if !connected {
                 warnings.push(format!("dangling output '{}.{}'", block_id, port.id));
+            }
+        }
+    }
+
+    // 9. Check block configuration (parameters, I/O declarations).
+    for (block_id, block) in diagram.blocks() {
+        if let Err(issues) = block.validate_configuration() {
+            for issue in &issues {
+                errors.push(SimError::new(
+                    ErrorCode::ValidationError,
+                    format!("block '{}' configuration error: {}", block_id, issue),
+                ));
             }
         }
     }
@@ -215,5 +246,56 @@ mod tests {
         let result = validate_diagram(&d);
         assert!(!result.is_valid);
         assert!(result.errors.iter().any(|e| e.code == ErrorCode::UnconnectedInput));
+    }
+
+    #[test]
+    fn test_empty_diagram() {
+        let d = Diagram::new("empty");
+        let result = validate_diagram(&d);
+        assert!(result.is_valid);
+        assert!(result.errors.is_empty());
+    }
+
+    #[test]
+    fn test_single_block_no_links() {
+        let mut d = Diagram::new("single");
+        let mut b = SimpleBlock::new("b1", "Const");
+        b.declare_output("out", crate::core::types::SignalType::Continuous);
+        d.add_block(Box::new(b));
+        let result = validate_diagram(&d);
+        // Single block with only outputs — no errors, only a dangling warning.
+        assert!(result.is_valid);
+        assert!(result.warnings.iter().any(|w| w.contains("dangling")));
+    }
+
+    #[test]
+    fn test_signal_type_mismatch() {
+        let mut d = Diagram::new("test_type");
+        let mut src = SimpleBlock::new("src", "Source");
+        src.declare_output("out", crate::core::types::SignalType::Continuous);
+        let mut sink = SimpleBlock::new("sink", "Sink");
+        sink.declare_input("in", crate::core::types::SignalType::Discrete);
+        d.add_block(Box::new(src));
+        d.add_block(Box::new(sink));
+        d.add_link(Link::new("l1", "src", "out", "sink", "in"));
+        let result = validate_diagram(&d);
+        assert!(!result.is_valid);
+        assert!(result.errors.iter().any(|e| e.code == ErrorCode::SignalTypeMismatchLink));
+    }
+
+    #[test]
+    fn test_duplicate_link_id() {
+        let mut d = Diagram::new("dup_link");
+        let mut src = SimpleBlock::new("src", "Source");
+        src.declare_output("out", crate::core::types::SignalType::Continuous);
+        let mut sink = SimpleBlock::new("sink", "Sink");
+        sink.declare_input("in", crate::core::types::SignalType::Continuous);
+        d.add_block(Box::new(src));
+        d.add_block(Box::new(sink));
+        d.add_link(Link::new("l1", "src", "out", "sink", "in"));
+        d.add_link(Link::new("l1", "src", "out", "sink", "in"));
+        let result = validate_diagram(&d);
+        assert!(!result.is_valid);
+        assert!(result.errors.iter().any(|e| e.code == ErrorCode::DuplicateLinkId));
     }
 }

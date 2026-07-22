@@ -19,6 +19,7 @@ struct DiagramData {
     blocks: Vec<BlockData>,
     links: Vec<LinkData>,
     version: u32,
+    schema: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -90,6 +91,7 @@ pub fn diagram_to_json(diagram: &Diagram) -> SerResult<String> {
         blocks: block_data,
         links: link_data,
         version: CURRENT_VERSION,
+        schema: "scico-rs/diagram/v1".to_string(),
     };
 
     serde_json::to_string_pretty(&data).map_err(|e| SimError::parse_error(e.to_string()))
@@ -192,5 +194,14 @@ mod tests {
     fn test_ser_error_on_invalid_json() {
         let result = json_to_diagram("not valid json");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_json_contains_schema() {
+        let diagram = Diagram::new("schema_test");
+        let json = diagram_to_json(&diagram).unwrap();
+        let data: DiagramData = serde_json::from_str(&json).unwrap();
+        assert_eq!(data.schema, "scico-rs/diagram/v1");
+        assert_eq!(data.version, 1);
     }
 }

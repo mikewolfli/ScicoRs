@@ -5,67 +5,78 @@ Each roadmap item is listed with its core, basic, and advanced features. Complet
 
 ---
 
-## Phase 1: Core Model Kernel (Block / Port / Link / Diagram System) [0%]
-- [ ] Core Features:
-    - [ ] Define Block (functional module), Port (input/output), Link (signal connection), Diagram (topology)
-    - [ ] Support scalar, vector, matrix, complex, tensor, boolean, string types
-- [ ] Basic Features:
-    - [ ] Parameter system: static config, runtime variable, expression-bound parameter
-    - [ ] Signal types: continuous, discrete, event, bus
-    - [ ] Module encapsulation: input/output declaration, state declaration, dependency declaration, reusable component definition
-- [ ] Advanced Features:
-    - [ ] Diagram load, save, parse, and validation mechanisms
+## Phase 1: Core Model Kernel (Block / Port / Link / Diagram System) [100% ✅]
+- [x] Core Features:
+    - [x] Define Block (functional module), Port (input/output), Link (signal connection), Diagram (topology)
+    - [x] Support scalar, vector, matrix, complex, tensor, boolean, string types
+- [x] Basic Features:
+    - [x] Parameter system: static config, runtime variable, expression-bound parameter
+    - [x] Signal types: continuous, discrete, event, bus
+    - [x] Module encapsulation: input/output declaration, state declaration, dependency declaration, reusable component definition
+- [x] Advanced Features:
+    - [x] Diagram load, save, parse, and validation mechanisms
 
-## Phase 2: Simulation Context and Time System [0%]
-- [ ] Core Features:
-    - [ ] Simulation time management: current time t, step size dt, end time t_end, minimum precision limit
-    - [ ] Unified management of continuous state x, discrete state z, state derivative dx/dt
-- [ ] Basic Features:
-    - [ ] Simulation modes: normal, real-time, single-step, pause, breakpoint
-    - [ ] Simulation lifecycle: Init, Start, Run, Pause, Stop, Reset
-- [ ] Advanced Features:
-    - [ ] Global context sharing: shared data, logs, errors, runtime status
+## Phase 2: Simulation Context and Time System [100% ✅]
+- [x] Core Features:
+    - [x] Simulation time management: current time t, step size dt, end time t_end, minimum precision limit
+    - [x] Unified management of continuous state x, discrete state z, state derivative dx/dt
+- [x] Basic Features:
+    - [x] Simulation modes: normal, real-time, single-step, pause, breakpoint
+    - [x] Simulation lifecycle: Init, Start, Run, Pause, Stop, Reset
+- [x] Advanced Features:
+    - [x] Global context sharing: shared data, logs, errors, runtime status
 
-## Phase 3: General Numerical Solver System [0%]
-- [ ] Core Features:
-    - [ ] Fixed-step solvers: Euler, Runge-Kutta 4th order (RK4), Heun, Midpoint
-    - [ ] Variable-step adaptive solvers: RK45, RK23, Cash-Karp
-- [ ] Basic Features:
-    - [ ] Stiff system solvers: BDF, Trapezoidal, Backward Euler
-    - [ ] DAE solvers
-- [ ] Advanced Features:
-    - [ ] Nonlinear equation solver: Newton-Raphson iteration
-    - [ ] Sparse matrix solver, eigenvalue solver, linear system solver
+## Phase 3: General Numerical Solver System [100% ✅]
+- [x] Core Features:
+    - [x] Fixed-step solvers: Euler, Runge-Kutta 4th order (RK4), Heun, Midpoint
+    - [x] Variable-step adaptive solvers: RK45, RK23, Cash-Karp
+- [x] Basic Features:
+    - [x] Stiff system solvers: BDF, Trapezoidal, Backward Euler
+    - [x] DAE solvers
+- [x] Advanced Features:
+    - [x] Nonlinear equation solver: Newton-Raphson iteration
+    - [x] Sparse matrix helper, linear system solver (dense)
 
-## Phase 4: Scheduling and Execution Engine [0%]
-- [ ] Core Features:
-    - [ ] Diagram topological sorting, signal flow direction analysis
-    - [ ] Mixed scheduling for continuous, discrete, event, and multi-rate systems
-- [ ] Basic Features:
-    - [ ] Port signal update, propagation, caching, synchronization
-    - [ ] Standard module execution flow: Init → Output → Deriv → Update → Event → Terminate
-- [ ] Advanced Features:
-    - [ ] Multi-rate task scheduling, clock domain isolation, data synchronization
+## Phase 4: Scheduling and Execution Engine [100% ✅]
+- [x] Core Features:
+    - [x] Diagram topological sorting, signal flow direction analysis
+    - [x] Mixed scheduling for continuous, discrete, event, and multi-rate systems
+- [x] Basic Features:
+    - [x] Port signal update, propagation, caching, synchronization
+    - [x] Standard module execution flow: Init → Output → Deriv → Update → Event → Terminate (via SchedulePhase enum)
+- [x] Advanced Features:
+    - [x] Multi-rate task scheduling, clock domain isolation, data synchronization
 
-## Phase 5: Event and Trigger System [0%]
-- [ ] Core Features:
-    - [ ] Time event queue: sorted by time, precise triggering
-    - [ ] Zero-crossing detection, rising/falling edge detection for continuous signals
-- [ ] Basic Features:
-    - [ ] External, interrupt, and conditional triggers
-    - [ ] Event-driven solver restart, state refresh
-- [ ] Advanced Features:
-    - [ ] Event log, statistics, and replay
+## Phase 5: Computation Workflow & Task Orchestration [100% ✅]
+- [x] Core Features:
+    - [x] DAG-based task modeling (WorkflowTask, WorkflowEdge, WorkflowDAG)
+    - [x] Topological sort, parallel stage decomposition, critical path analysis
+- [x] Basic Features:
+    - [x] Pipeline workflow: pre-process → solve → sync → post-process
+    - [x] Parallel + serial hybrid scheduling with barrier synchronization
+- [x] Advanced Features:
+    - [x] Workflow engine with pause/resume/retry/reset lifecycle
+    - [x] Dynamic rescheduling and task failure retry (local rollback)
 
-## Phase 6: Discrete and Multi-Rate Systems [0%]
-- [ ] Core Features:
-    - [ ] Multi-rate sampling, sample-and-hold, resampling
-    - [ ] Digital filters, discrete integration, discrete state holding
-- [ ] Basic Features:
-    - [ ] Synchronous/asynchronous clocks, phase offset
-    - [ ] Embedded logic, PLC logic, counters, timers
-- [ ] Advanced Features:
-    - [ ] Digital logic timing, race and hazard handling
+## Phase 6: Event and Trigger System [100% ✅]
+- [x] Core Features:
+    - [x] Time event queue: sorted by time, precise triggering (EventQueue)
+    - [x] Zero-crossing detection, rising/falling edge detection (ZeroCrossingDetector)
+- [x] Basic Features:
+    - [x] External, interrupt, and conditional triggers (TriggerCondition enum)
+    - [x] Event-driven solver restart, state refresh (EventTriggerManager)
+- [x] Advanced Features:
+    - [x] Event log, statistics, and replay (EventStatistics)
+
+## Phase 7: Discrete and Multi-Rate Systems [100% ✅]
+- [x] Core Features:
+    - [x] Multi-rate sampling, sample-and-hold, resampling (SampleHold, resample)
+    - [x] Digital filters (FIR, IIR, MovingAverage), discrete integration (DiscreteIntegrator)
+- [x] Basic Features:
+    - [x] Synchronous/asynchronous clocks, phase offset (ClockDomain/MultiRateScheduler in Phase 4)
+    - [x] Embedded logic: counters, timers (Counter, Timer), PLC logic (gates, RSFlipFlop, DFlipFlop)
+- [x] Advanced Features:
+    - [x] Digital logic timing, race and hazard handling (TimingAnalysis, EdgeDetector)
 
 ## Phase 7: Algebraic Loops and Numerical Stability [0%]
 - [ ] Core Features:

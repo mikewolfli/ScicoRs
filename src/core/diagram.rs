@@ -148,6 +148,21 @@ impl Diagram {
             .values()
             .all(|b| b.status() == ComponentStatus::Completed)
     }
+
+    /// Deep-clone this diagram by cloning each block via the `Block` trait.
+    pub fn clone_diagram(&self) -> Self {
+        let mut new_blocks: HashMap<BlockId, Box<dyn Block>> = HashMap::new();
+        for (id, block) in &self.blocks {
+            new_blocks.insert(id.clone(), block.clone_block());
+        }
+        Self {
+            name: self.name.clone(),
+            description: self.description.clone(),
+            blocks: new_blocks,
+            links: self.links.clone(),
+            execution_order: self.execution_order.clone(),
+        }
+    }
 }
 
 #[cfg(test)]

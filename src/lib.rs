@@ -2,55 +2,41 @@
 //!
 //! A universal simulation kernel designed to unify all engineering and
 //! scientific simulation scenarios across every discipline, scale, and field.
-//! It provides a single architecture for modeling, simulation, and data
-//! management, enabling seamless integration from the smallest chip to the
-//! largest cosmic system.
 //!
-//! ## Architecture
-//!
-//! - **core** — Block/Port/Link/Diagram model kernel
-//! - **solver** — ODE, DAE, stiff, nonlinear, sparse solvers
-//! - **engine** — Scheduling and execution engine
-//! - **event** — Event and trigger system
-//! - **discrete** — Discrete and multi-rate systems
-//! - **algebra** — Algebraic loop detection and numerical stability
-//! - **math** — Math, signal, and control library
-//! - **coordinate** — Unified coordinate system
-//! - **unit** — Unified dimension and unit system
-//! - **database** — TOML + SQLite database system
-//! - **modules** — Domain-specific simulation modules
-//! - **physics** — Physics simulation building blocks
-//! - **coupling** — Multi-physics coupling bus
-//! - **visualization** — Data recording and visualization
-//! - **platform** — Cross-platform and system integration
-//! - **scripting** — Embedded scripting ecosystem
-//! - **ext** — Extension and plugin system
-//! - **utils** — General-purpose utilities
+//! Architecture (7 layers):
+//!   core/      — Data model layer: Block, Port, Link, Diagram, Types
+//!   runtime/   — Simulation runtime: Context, State, Engine, Solvers
+//!   blocks/    — Standard block library: sources, math, logic, sinks
+//!   domains/   — Domain-specific simulations: circuits, fluid, quantum, etc.
+//!   coupling/  — Multi-physics coupling bus
+//!   postproc/  — Post-processing & visualization
+//!   bindings/  — Python bindings & plugin system
 
 pub mod core;
-pub mod solver;
-pub mod engine;
-pub mod event;
-pub mod discrete;
-pub mod algebra;
-pub mod math;
-pub mod coordinate;
-pub mod unit;
-pub mod database;
-pub mod modules;
-pub mod physics;
+pub mod runtime;
+
+// Future module placeholders (declared for architecture completeness)
+pub mod bindings;
+pub mod blocks;
 pub mod coupling;
-pub mod visualization;
-pub mod platform;
-pub mod scripting;
-pub mod ext;
-pub mod utils;
+pub mod db;
+pub mod domains;
+pub mod postproc;
 
 // Re-export commonly used types at the crate root for convenience.
-pub use core::types::{Scalar, Time, SignalValue, SignalType, PortDirection};
 pub use core::block::{Block, BlockError, SimpleBlock};
 pub use core::diagram::Diagram;
 pub use core::error::{ErrorCode, SimError};
+pub use core::link::Link;
 pub use core::param::{Parameter, ParameterSet};
 pub use core::port::Port;
-pub use core::link::Link;
+pub use core::types::{PortDirection, Scalar, SignalType, SignalValue, Time};
+pub use runtime::context::{LogLevel, SimContext, SimLifecycle, SimRunMode, TimeConfig};
+pub use runtime::discrete::{
+    Counter, CounterDirection, DiscreteIntegrator, EdgeDetector, FIRFilter, IIRFilter,
+    MovingAverage, RSFlipFlop, SampleHold, Timer,
+};
+pub use runtime::engine::{SimEngine, SimStepResult, SimSummary};
+pub use runtime::event::{Event, EventQueue, EventTriggerManager, EventType, ZeroCrossingDetector};
+pub use runtime::state::{ContinuousState, DiscreteState, SimStateManager, StateSnapshot};
+pub use runtime::workflow::{WorkflowDAG, WorkflowEdge, WorkflowEngine, WorkflowTask};
