@@ -101,9 +101,24 @@ pub fn build_schedule(_diagram: &Diagram, _config: &ScheduleConfig) -> Vec<Sched
     SchedulePhase::all().to_vec()
 }
 
-/// Execute the ComputeOutputs phase for all blocks in topological order.
-pub fn execute_output_phase(_diagram: &Diagram, _order: &[BlockId]) -> Result<(), SimError> {
-    // Output execution happens in engine via get_block_mut
+/// Validate that all blocks in the execution order exist before output computation.
+///
+/// This function performs a read-only validation check: it confirms each block ID
+/// in `order` exists in the `diagram`. The actual `output()` mutation is performed
+/// by the engine (which holds `&mut Diagram`). After the engine calls `output()` on
+/// each block, it writes the results into the signal cache via `extract_outputs()`.
+///
+/// This design separates validation (done here with `&Diagram`) from mutation
+/// (done by the engine with `&mut Diagram`), avoiding borrow conflicts.
+pub fn execute_output_phase(diagram: &Diagram, order: &[BlockId]) -> Result<(), SimError> {
+    for block_id in order {
+        if diagram.get_block(block_id).is_none() {
+            return Err(SimError::runtime(format!(
+                "execute_output_phase: block '{}' not found",
+                block_id
+            )));
+        }
+    }
     Ok(())
 }
 
@@ -121,9 +136,24 @@ pub fn execute_deriv_phase(diagram: &Diagram, order: &[BlockId]) -> Result<Vec<S
     Ok(all_derivs)
 }
 
-/// Execute the UpdateDiscrete phase for all discrete blocks.
-pub fn execute_update_phase(_diagram: &Diagram, _order: &[BlockId]) -> Result<(), SimError> {
-    // Discrete updates happen via engine's block iteration
+/// Validate that all blocks exist before discrete update phase.
+///
+/// This function performs a read-only validation check. The actual `update()`
+/// mutation is performed by the engine (which holds `&mut Diagram`). After the
+/// engine calls `update()` on each block, it advances the signal cache for the
+/// next time step.
+///
+/// This design separates validation (done here with `&Diagram`) from mutation
+/// (done by the engine with `&mut Diagram`), avoiding borrow conflicts.
+pub fn execute_update_phase(diagram: &Diagram, order: &[BlockId]) -> Result<(), SimError> {
+    for block_id in order {
+        if diagram.get_block(block_id).is_none() {
+            return Err(SimError::runtime(format!(
+                "execute_update_phase: block '{}' not found",
+                block_id
+            )));
+        }
+    }
     Ok(())
 }
 

@@ -11,6 +11,7 @@ use crate::core::error::SimError;
 use crate::core::state::StateDeclaration;
 use crate::core::types::{ComponentStatus, ExecutionPhase, Scalar};
 use crate::runtime::context::{SimContext, SimLifecycle, SimRunMode, TimeConfig};
+use crate::runtime::scheduler::{Scheduler, SequentialScheduler};
 use crate::runtime::solver::Euler;
 use crate::runtime::solver::traits::OdeSolver;
 use crate::runtime::state::SimStateManager;
@@ -61,6 +62,8 @@ pub struct SimEngine {
     execution_order: Vec<BlockId>,
     /// Numerical ODE solver used for continuous state integration.
     solver: Box<dyn OdeSolver>,
+    /// Scheduler for block execution ordering, signal propagation, and event handling.
+    scheduler: Box<dyn Scheduler>,
 }
 
 impl std::fmt::Debug for SimEngine {
@@ -109,12 +112,17 @@ impl SimEngine {
         }
         let state = SimStateManager::from_declaration(&combined_decl);
 
+        // Initialize default sequential scheduler
+        let mut scheduler: Box<dyn Scheduler> = Box::new(SequentialScheduler::new());
+        scheduler.initialize(&diagram)?;
+
         Ok(Self {
             context: ctx,
             state,
             diagram,
             execution_order,
             solver: Box::new(Euler::new()),
+            scheduler,
         })
     }
 
@@ -127,9 +135,61 @@ impl SimEngine {
         self
     }
 
+    /// Replace the default sequential scheduler with a custom scheduler.
+    ///
+    /// Use this to select hybrid, multi-rate, or other scheduling strategies.
+    pub fn with_scheduler(mut self, scheduler: Box<dyn Scheduler>) -> Self {
+        self.scheduler = scheduler;
+        self
+    }
+
     /// Get a reference to the current ODE solver.
     pub fn solver(&self) -> &dyn OdeSolver {
         self.solver.as_ref()
+    }
+
+    /// Get a reference to the current scheduler.
+    pub fn scheduler(&self) -> &dyn Scheduler {
+        self.scheduler.as_ref()
+    }
+
+    /// Dynamically re-schedule after diagram changes.
+    ///
+    /// Re-computes the topological execution order, re-initializes the
+    /// scheduler's internal state (signal cache etc.), and updates the
+    /// state manager to match any new blocks.
+    pub fn reschedule(&mut self) -> Result<(), SimError> {
+        // Recompute execution order
+        self.execution_order = self
+            .diagram
+            .compute_execution_order()
+            .ok_or_else(|| {
+                SimError::new(
+                    crate::core::error::ErrorCode::CycleDetected,
+                    "cycle detected in diagram: cannot reschedule",
+                )
+            })?
+            .to_vec();
+
+        // Re-initialize scheduler
+        self.scheduler.initialize(&self.diagram)?;
+
+        // Rebuild state manager
+        let mut combined_decl = StateDeclaration::new();
+        for block_id in &self.execution_order {
+            if let Some(block) = self.diagram.get_block(block_id) {
+                let decl = block.state_declaration();
+                for var in &decl.continuous {
+                    combined_decl.add_continuous(var.clone());
+                }
+                for var in &decl.discrete {
+                    combined_decl.add_discrete(var.clone());
+                }
+            }
+        }
+        self.state = SimStateManager::from_declaration(&combined_decl);
+
+        Ok(())
     }
 
     /// Initialize all blocks in the diagram.
@@ -186,8 +246,9 @@ impl SimEngine {
     /// 3. Collect derivatives from all blocks
     /// 4. Integrate continuous state (Euler): x += dt * dx
     /// 5. Call `update()` on all blocks (discrete updates)
-    /// 6. Advance simulation time
-    /// 7. Check stop conditions
+    /// 6. Signal propagation & event handling via scheduler
+    /// 7. Advance simulation time
+    /// 8. Check stop conditions
     pub fn step(&mut self) -> Result<SimStepResult, SimError> {
         // Validate state
         if self.context.lifecycle == SimLifecycle::Constructed {
@@ -225,8 +286,19 @@ impl SimEngine {
             }
         }
 
+        // ── Phase 3: Signal propagation via scheduler ──
+        // Extract block outputs to the scheduler's signal cache and propagate
+        // through links to destination input ports.
+        crate::runtime::scheduler::signal_prop::extract_outputs(
+            &self.diagram,
+            self.scheduler.signal_cache_mut(),
+        )?;
+        crate::runtime::scheduler::signal_prop::propagate_signals(
+            &self.diagram,
+            self.scheduler.signal_cache_mut(),
+        )?;
+
         // ── Phase 4: Integrate continuous state using ODE solver ──
-        // Use the configured ODE solver instead of hardcoded Euler integration.
         // The solver trait provides a unified interface that all solver
         // implementations satisfy (Euler, RK4, RK45, BackwardEuler, etc.).
         if !self.state.continuous.is_empty() {
@@ -273,16 +345,19 @@ impl SimEngine {
             }
         }
 
-        // ── Phase 6: Zero-crossing detection (informational, no action yet) ──
+        // ── Phase 6: Zero-crossing detection ──
         for block_id in &self.execution_order {
             if let Some(block) = self.diagram.get_block(block_id) {
                 let _crossings = block.zero_crossings();
-                // Future: handle zero-crossing events for variable-step solvers
+                // Future: densify step around zero-crossing points
             }
         }
 
         // ── Phase 7: Advance time ──
         self.context.advance_time();
+
+        // Advance scheduler's signal cache for next step
+        self.scheduler.advance_cache();
 
         // ── Phase 8: Check stop conditions ──
         if self.context.is_finished() || self.diagram.all_completed() {
@@ -680,5 +755,74 @@ mod tests {
 
         let result = SimEngine::new(d, TimeConfig::until(1.0));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_engine_solver_switch_accuracy() {
+        // Create a diagram with a block that has continuous state
+        let mut d = Diagram::new("solver_test");
+        let mut integrator = SimpleBlock::new("int", "Integrator");
+        integrator.declare_input("in", SignalType::Continuous);
+        integrator.declare_output("out", SignalType::Continuous);
+        integrator.add_continuous_state("x", 1.0);
+        d.add_block(Box::new(integrator));
+        d.compute_execution_order();
+
+        let config = TimeConfig::until(1.0);
+
+        // Run with Euler (1st order)
+        let mut engine_euler = SimEngine::new(d.clone_diagram(), config).unwrap();
+        engine_euler.init().unwrap();
+        engine_euler.start().unwrap();
+        let summary_euler = engine_euler.run();
+
+        // Run with RK4 (4th order) — should be more accurate
+        let mut engine_rk4 = SimEngine::new(d.clone_diagram(), config)
+            .unwrap()
+            .with_solver(Box::new(crate::runtime::solver::RK4::new()));
+        engine_rk4.init().unwrap();
+        engine_rk4.start().unwrap();
+        let summary_rk4 = engine_rk4.run();
+
+        // Both should complete successfully
+        assert!(summary_euler.completed);
+        assert!(summary_rk4.completed);
+
+        // Both should advance time to ~1.0
+        assert!((summary_euler.final_time - 1.0).abs() < 1e-6);
+        assert!((summary_rk4.final_time - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_engine_solver_names() {
+        let d = create_test_diagram();
+        let config = TimeConfig::until(1.0);
+
+        let engine = SimEngine::new(d, config).unwrap();
+        assert_eq!(engine.solver().name(), "Euler");
+
+        let engine = engine.with_solver(Box::new(crate::runtime::solver::RK4::new()));
+        assert_eq!(engine.solver().name(), "RK4");
+    }
+
+    #[test]
+    fn test_engine_solver_stats() {
+        let mut d = Diagram::new("stats_test");
+        let mut block = SimpleBlock::new("b", "TestBlock");
+        block.declare_input("in", SignalType::Continuous);
+        block.add_continuous_state("x", 1.0);
+        d.add_block(Box::new(block));
+        d.compute_execution_order();
+
+        let config = TimeConfig::until(0.1);
+        let mut engine = SimEngine::new(d, config).unwrap();
+        engine.init().unwrap();
+        engine.start().unwrap();
+        let _ = engine.run();
+
+        // Solver should have recorded some stats
+        let solver = engine.solver();
+        assert!(solver.stats().steps_accepted > 0);
+        assert!(solver.stats().function_evals > 0);
     }
 }

@@ -136,10 +136,31 @@ pub fn extract_outputs(diagram: &Diagram, cache: &mut SignalCache) -> Result<(),
     Ok(())
 }
 
-/// Copy cached input values back to block input ports.
-pub fn update_inputs(diagram: &Diagram, _cache: &SignalCache) -> Result<(), SimError> {
-    for (_id, _block) in diagram.blocks() {
-        // Cache is read externally; blocks access it via get()
+/// Write cached signal values back to block input ports.
+///
+/// For each block in the diagram, iterates over its input ports and writes
+/// the corresponding cached signal value (previously propagated from source
+/// output ports via `propagate_signals()`) into the port's signal field.
+/// Requires `&mut Diagram` because port writes mutate block state.
+pub fn update_inputs(diagram: &mut Diagram, cache: &SignalCache) -> Result<(), SimError> {
+    // Collect all block IDs first to avoid borrow conflicts
+    let block_ids: Vec<String> = diagram.blocks().map(|(id, _)| id.clone()).collect();
+    for id in &block_ids {
+        if let Some(block) = diagram.get_block_mut(id) {
+            let port_ids: Vec<String> = block.ports().inputs().map(|p| p.id.clone()).collect();
+            for port_id in &port_ids {
+                if let Some(value) = cache.get(id, port_id)
+                    && !matches!(value, SignalValue::None)
+                    && let Some(port) = block.ports_mut().get_mut(port_id)
+                {
+                    port.write(crate::core::signal::Signal::new(
+                        port.signal_type,
+                        value.clone(),
+                        0.0, // time will be set by engine
+                    ));
+                }
+            }
+        }
     }
     Ok(())
 }

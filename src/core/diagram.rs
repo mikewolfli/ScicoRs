@@ -116,7 +116,23 @@ impl Diagram {
     /// Compute topological execution order.
     /// Returns None if a cycle is detected.
     pub fn compute_execution_order(&mut self) -> Option<&[BlockId]> {
-        let order = self.links.topological_sort()?;
+        // Get topological order from links (only blocks that participate in links).
+        let linked_order = self.links.topological_sort()?;
+
+        // Collect all block IDs from the diagram.
+        let all_block_ids: std::collections::HashSet<BlockId> =
+            self.blocks.keys().cloned().collect();
+        let linked_set: std::collections::HashSet<BlockId> =
+            linked_order.iter().cloned().collect();
+
+        // Append any isolated blocks (no links) after the linked order.
+        let mut order = linked_order;
+        for bid in all_block_ids {
+            if !linked_set.contains(&bid) {
+                order.push(bid);
+            }
+        }
+
         self.execution_order = Some(order);
         Some(self.execution_order.as_ref().unwrap())
     }

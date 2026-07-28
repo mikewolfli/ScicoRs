@@ -54,7 +54,9 @@ pub use param::{ExpressionParameter, Parameter, ParameterSet};
 pub use port::Port;
 pub use signal::{BusSignal, ContinuousSignal, DiscreteSignal, EventSignal, Signal};
 pub use state::{ContinuousStateVar, DiscreteStateVar, StateDeclaration};
+pub use coord::{Coord1D, Coord2D, Coord3D, CoordSystem, Transform4x4};
 pub use tensor::{Tensor, TensorDims};
+pub use units::{Dimension, Quantity, Unit};
 pub use types::{
     ComponentStatus, EPSILON, ExecutionPhase, Extent, Index, PortDirection, Rate, Scalar,
     SignalType, SignalValue, Time,

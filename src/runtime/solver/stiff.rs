@@ -58,15 +58,13 @@ impl OdeSolver for BackwardEuler {
 
         // Define the implicit residual: G(x) = x - x_n - dt * f(t_next, x) = 0
         let mut newton = NewtonRaphson::new(self.config);
-        let stats_ptr = &mut self.stats as *mut SolverStats;
 
-        // Use Newton to solve G(x) = 0
+        // Use Newton to solve G(x) = 0.
+        // Newton internally counts its own function evaluations and Jacobian evaluations,
+        // which we accumulate into self.stats after the solve returns.
         let mut solve_f = |x_curr: &[Scalar], result: &mut [Scalar]| -> Result<(), SimError> {
             let mut fx = vec![0.0; n];
             f(x_curr, t_next, &mut fx)?;
-            unsafe {
-                (*stats_ptr).function_evals += 1;
-            }
             for i in 0..n {
                 result[i] = x_curr[i] - x_n[i] - dt * fx[i];
             }
@@ -74,9 +72,9 @@ impl OdeSolver for BackwardEuler {
         };
 
         let result = newton.solve(&mut solve_f, None, x);
-        // Accumulate Newton's internal stats
+        // Accumulate Newton's internal stats (no double-counting: Newton counts its own calls)
         self.stats.jacobian_evals += newton.stats().jacobian_evals;
-        self.stats.function_evals += newton.stats().function_evals - 1; // subtract counted calls
+        self.stats.function_evals += newton.stats().function_evals;
         result
     }
 
@@ -136,20 +134,15 @@ impl OdeSolver for Trapezoidal {
         // Compute f(t_n, x_n) — explicit part
         let mut f_n = vec![0.0; n];
         f(&x_n, t, &mut f_n)?;
+        self.stats.function_evals += 1;
 
         // Define the implicit residual:
         // G(x) = x - x_n - dt/2 * (f_n + f(t_next, x)) = 0
         let mut newton = NewtonRaphson::new(self.config);
-        let stats_ptr = &mut self.stats as *mut SolverStats;
-
-        self.stats.function_evals += 1; // f_n already computed
 
         let mut solve_f = |x_curr: &[Scalar], result: &mut [Scalar]| -> Result<(), SimError> {
             let mut fx = vec![0.0; n];
             f(x_curr, t_next, &mut fx)?;
-            unsafe {
-                (*stats_ptr).function_evals += 1;
-            }
             for i in 0..n {
                 result[i] = x_curr[i] - x_n[i] - 0.5 * dt * (f_n[i] + fx[i]);
             }
@@ -158,7 +151,7 @@ impl OdeSolver for Trapezoidal {
 
         let result = newton.solve(&mut solve_f, None, x);
         self.stats.jacobian_evals += newton.stats().jacobian_evals;
-        self.stats.function_evals += newton.stats().function_evals - 1; // avoid double count
+        self.stats.function_evals += newton.stats().function_evals;
         result
     }
 

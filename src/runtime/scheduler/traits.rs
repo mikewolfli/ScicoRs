@@ -53,6 +53,17 @@ pub trait Scheduler: Send + Sync {
 
     /// Get the current topological execution order.
     fn execution_order(&self) -> &[BlockId];
+
+    /// Get a mutable reference to the scheduler's signal cache.
+    ///
+    /// Used by the engine to write block output values before propagation.
+    fn signal_cache_mut(&mut self) -> &mut SignalCache;
+
+    /// Advance the signal cache to the next time step.
+    ///
+    /// Moves current values to previous (for edge detection) and resets
+    /// current values. Called by the engine at the end of each step.
+    fn advance_cache(&mut self);
 }
 
 /// Execution context passed to the scheduler for each step.
@@ -166,5 +177,13 @@ impl Scheduler for SequentialScheduler {
 
     fn execution_order(&self) -> &[BlockId] {
         &self.order
+    }
+
+    fn signal_cache_mut(&mut self) -> &mut SignalCache {
+        &mut self.signal_cache
+    }
+
+    fn advance_cache(&mut self) {
+        self.signal_cache.advance();
     }
 }

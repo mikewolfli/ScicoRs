@@ -39,7 +39,13 @@ pub use workflow::{
     stage_from_task_ids,
 };
 
-// Future module placeholders (declared for architecture completeness)
 pub mod algebraic;
+pub use algebraic::{
+    AlgebraicLoop, AlgebraicLoopDetector, AlgebraicSolverConfig, AlgebraicSolveResult,
+    DirectFeedthroughPath, FixedPointIteration, LoopAnalysis, NumericalGuard, RelaxationIteration,
+    find_direct_feedthrough_paths,
+};
+// Phase 4: unified scheduling layer (implemented in scheduler/)
 pub mod scheduler;
+// Phase 3: general numerical solver system (implemented in solver/)
 pub mod solver;

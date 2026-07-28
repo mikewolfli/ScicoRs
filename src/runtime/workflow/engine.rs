@@ -12,7 +12,7 @@ use super::parallel::ParallelScheduler;
 use super::stage::{WorkflowStage, decompose_stages};
 
 /// Execution status of the workflow engine.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkflowStatus {
     /// Engine created, not yet started.
     Idle,
@@ -23,7 +23,7 @@ pub enum WorkflowStatus {
     /// All stages completed successfully.
     Completed,
     /// Execution failed with an error message.
-    Failed(&'static str),
+    Failed(String),
 }
 
 /// Summary result returned after a workflow run.
@@ -151,7 +151,7 @@ impl WorkflowEngine {
 
         if self.current_stage >= self.stages.len() {
             self.status = WorkflowStatus::Completed;
-            return Ok(self.status);
+            return Ok(self.status.clone());
         }
 
         self.status = WorkflowStatus::Running;
@@ -164,11 +164,11 @@ impl WorkflowEngine {
                 } else {
                     self.status = WorkflowStatus::Paused;
                 }
-                Ok(self.status)
+                Ok(self.status.clone())
             }
             Err(err_msg) => {
                 self.status = WorkflowStatus::Failed(err_msg);
-                Ok(self.status)
+                Ok(self.status.clone())
             }
         }
     }
@@ -237,8 +237,8 @@ impl WorkflowEngine {
 
     /// Execute the tasks in the current stage.
     ///
-    /// Returns `Ok(())` on success or a static error string on failure.
-    fn execute_current_stage(&mut self) -> Result<(), &'static str> {
+    /// Returns `Ok(())` on success or an error description on failure.
+    fn execute_current_stage(&mut self) -> Result<(), String> {
         let stage = &self.stages[self.current_stage];
         let task_ids = &stage.task_ids;
 
@@ -279,7 +279,7 @@ impl WorkflowEngine {
         }
 
         if has_failure {
-            Err("stage execution completed with task failures")
+            Err("stage execution completed with task failures".to_string())
         } else {
             Ok(())
         }
@@ -291,7 +291,7 @@ impl WorkflowEngine {
             total_stages: self.stages.len(),
             completed_stages: self.current_stage,
             failed_tasks: self.failed_tasks.clone(),
-            status: self.status,
+            status: self.status.clone(),
             total_time: None,
         }
     }
@@ -524,7 +524,7 @@ mod tests {
         // The task with NaN cost should trigger a failure
         assert_eq!(
             engine.status,
-            WorkflowStatus::Failed("stage execution completed with task failures")
+            WorkflowStatus::Failed("stage execution completed with task failures".to_string())
         );
     }
 }

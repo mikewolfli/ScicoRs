@@ -40,4 +40,4 @@ pub use multirate::{ClockDomain, MultiRateScheduler, build_multirate_schedule};
 pub use signal_flow::{SignalFlowGraph, analyze_signal_flow, compute_propagation_layers};
 pub use signal_prop::{SignalCache, extract_outputs, propagate_signals, update_inputs};
 pub use topo::{CycleInfo, DiGraph, detect_cycles, has_cycles, topological_sort};
-pub use traits::{ScheduleContext, ScheduleStepResult, Scheduler};
+pub use traits::{ScheduleContext, ScheduleStepResult, Scheduler, SequentialScheduler};
