@@ -1,9 +1,8 @@
-//! Parallel scheduler with barrier synchronisation.
+//! Parallel scheduler with barrier synchronisation using rayon.
 //!
 //! Provides scheduling primitives for parallel task execution with
-//! optional barrier synchronisation between stages. The actual task
-//! execution uses a sequential fallback (no external parallelism
-//! dependency such as rayon is required).
+//! optional barrier synchronisation between stages. Uses rayon's
+//! work-stealing thread pool for automatic load balancing.
 
 use std::time::Duration;
 
@@ -34,6 +33,11 @@ pub struct ParallelScheduler {
 impl ParallelScheduler {
     /// Create a new parallel scheduler with the given thread limit.
     pub fn new(max_threads: usize) -> Self {
+        if max_threads > 1 {
+            let _ = rayon::ThreadPoolBuilder::new()
+                .num_threads(max_threads)
+                .build_global();
+        }
         Self {
             max_threads: max_threads.max(1),
             barriers: Vec::new(),
@@ -68,32 +72,41 @@ impl ParallelScheduler {
         chunks
     }
 
-    /// Execute a slice of tasks using a closure, with sequential fallback.
+    /// Execute tasks in parallel using rayon's work-stealing thread pool.
     ///
-    /// Since no external parallelism crate (e.g. rayon) is assumed, this
-    /// implementation runs tasks sequentially. The signature is designed
-    /// to be a drop-in replacement for a parallel executor: when a runtime
-    /// with thread-pool support becomes available, the body can be swapped
-    /// to use `std::thread::scope` or a thread-pool without changing callers.
-    ///
-    /// Returns a vector of results, one per task, in the same order as `tasks`.
+    /// Tasks are dispatched across available threads automatically.
+    /// Returns results in the same order as the input tasks.
     pub fn execute_parallel<T, F>(tasks: &[T], f: F) -> Vec<Result<(), String>>
     where
         T: Send + Sync,
         F: Fn(&T) -> Result<(), String> + Send + Sync,
     {
-        tasks.iter().map(f).collect()
+        use rayon::prelude::*;
+        tasks.par_iter().map(f).collect()
+    }
+
+    /// Execute tasks with a scope-based parallel for loop.
+    /// Better suited for CPU-bound numerical work where each task is independent.
+    pub fn execute_parallel_scoped<T, F>(tasks: &[T], f: F)
+    where
+        T: Send + Sync,
+        F: Fn(&T) + Send + Sync,
+    {
+        use rayon::prelude::*;
+        tasks.par_iter().for_each(f);
     }
 
     /// Register a synchronisation barrier for a pipeline stage.
     pub fn add_barrier(&mut self, barrier: BarrierSync) {
-        // Replace if a barrier with the same stage_id already exists
-        if let Some(pos) = self.barriers.iter().position(|b| b.stage_id == barrier.stage_id) {
+        if let Some(pos) = self
+            .barriers
+            .iter()
+            .position(|b| b.stage_id == barrier.stage_id)
+        {
             self.barriers[pos] = barrier;
         } else {
             self.barriers.push(barrier);
         }
-        // Resize tracking counters
         self.barrier_counts.resize(self.barriers.len(), 0);
     }
 
@@ -117,8 +130,6 @@ impl Default for ParallelScheduler {
 }
 
 /// Return the number of available logical CPUs.
-///
-/// Falls back to 1 if `std::thread::available_parallelism` is unavailable.
 fn num_cpus() -> usize {
     std::thread::available_parallelism()
         .map(|n| n.get())

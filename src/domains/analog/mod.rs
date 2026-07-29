@@ -26,3 +26,5 @@ pub use devices::{
 };
 pub use mna::{MnaMatrix, MnaSolution, solve_mna};
 pub use noise::{flicker_noise_psd, shot_noise_psd, thermal_noise_psd};
+
+pub mod harmonic_balance;

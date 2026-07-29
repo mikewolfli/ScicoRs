@@ -5,10 +5,38 @@
 //! - **RK4** (4th order) — classical Runge-Kutta, good balance
 //! - **Heun** (2nd order) — improved Euler / predictor-corrector
 //! - **Midpoint** (2nd order) — explicit midpoint rule
+//!
+//! # Butcher tableau coefficients
+//!
+//! The classical RK4 coefficients are exported as constants so domain modules
+//! (aerospace, quantum/lindblad) can reference them for their own domain-aware
+//! RK4 wrappers without duplicating the numerical values.
 
+use super::traits::{OdeRhs, OdeSolver, SolverStats, SolverStepResult};
 use crate::core::error::SimError;
 use crate::core::types::Scalar;
-use super::traits::{OdeSolver, OdeRhs, SolverStats, SolverStepResult};
+
+/// Butcher tableau `c` vector (nodes) for classical RK4: `[0, ½, ½, 1]`.
+pub const RK4_C: [Scalar; 4] = [0.0, 0.5, 0.5, 1.0];
+
+/// Butcher tableau `b` vector (weights) for classical RK4: `[¹/₆, ¹/₃, ¹/₃, ¹/₆]`.
+pub const RK4_B: [Scalar; 4] = [1.0 / 6.0, 1.0 / 3.0, 1.0 / 3.0, 1.0 / 6.0];
+
+/// Butcher tableau `a` matrix (stage coefficients) for classical RK4.
+///
+/// ```text
+/// 0   | 0  0  0 0
+/// ½   | ½  0  0 0
+/// ½   | 0  ½  0 0
+/// 1   | 0  0  1 0
+///     | ¹/₆ ¹/₃ ¹/₃ ¹/₆
+/// ```
+pub const RK4_A: [[Scalar; 4]; 4] = [
+    [0.0, 0.0, 0.0, 0.0],
+    [0.5, 0.0, 0.0, 0.0],
+    [0.0, 0.5, 0.0, 0.0],
+    [0.0, 0.0, 1.0, 0.0],
+];
 
 /// Forward Euler method: 1st order, 1 stage.
 ///
@@ -348,7 +376,9 @@ mod tests {
         let analytical_at_1 = (-1.0_f64).exp();
 
         for step in 0..100 {
-            solver.step(&mut decay_rhs, &mut x, step as Scalar * dt, dt).unwrap();
+            solver
+                .step(&mut decay_rhs, &mut x, step as Scalar * dt, dt)
+                .unwrap();
         }
 
         // Euler is 1st order: with dt=0.01, error ~ O(dt) ≈ 0.01
@@ -371,7 +401,9 @@ mod tests {
         let analytical_at_1 = (-1.0_f64).exp();
 
         for step in 0..100 {
-            solver.step(&mut decay_rhs, &mut x, step as Scalar * dt, dt).unwrap();
+            solver
+                .step(&mut decay_rhs, &mut x, step as Scalar * dt, dt)
+                .unwrap();
         }
 
         // RK4 is 4th order: with dt=0.01, error ≈ O(dt^4) ≈ 1e-8
@@ -394,7 +426,9 @@ mod tests {
         let analytical_at_1 = (-1.0_f64).exp();
 
         for step in 0..100 {
-            solver.step(&mut decay_rhs, &mut x, step as Scalar * dt, dt).unwrap();
+            solver
+                .step(&mut decay_rhs, &mut x, step as Scalar * dt, dt)
+                .unwrap();
         }
 
         let error = (x[0] - analytical_at_1).abs();
@@ -416,7 +450,9 @@ mod tests {
         let analytical_at_1 = (-1.0_f64).exp();
 
         for step in 0..100 {
-            solver.step(&mut decay_rhs, &mut x, step as Scalar * dt, dt).unwrap();
+            solver
+                .step(&mut decay_rhs, &mut x, step as Scalar * dt, dt)
+                .unwrap();
         }
 
         let error = (x[0] - analytical_at_1).abs();
@@ -431,7 +467,9 @@ mod tests {
         let dt = 0.1;
 
         for step in 0..1000 {
-            solver.step(&mut decay_rhs, &mut x, step as Scalar * dt, dt).unwrap();
+            solver
+                .step(&mut decay_rhs, &mut x, step as Scalar * dt, dt)
+                .unwrap();
         }
 
         // At t=100, exp(-100) ≈ 3.7e-44 — should be very small but positive
@@ -453,8 +491,11 @@ mod tests {
         let dt = 0.01;
         let initial_energy = 1.0;
 
-        for step in 0..628 { // ~one period: 2*pi/0.01 ≈ 628
-            solver.step(&mut f, &mut state, step as Scalar * dt, dt).unwrap();
+        for step in 0..628 {
+            // ~one period: 2*pi/0.01 ≈ 628
+            solver
+                .step(&mut f, &mut state, step as Scalar * dt, dt)
+                .unwrap();
         }
 
         let energy = state[0] * state[0] + state[1] * state[1];

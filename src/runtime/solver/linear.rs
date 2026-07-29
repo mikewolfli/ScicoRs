@@ -12,75 +12,12 @@ use crate::core::types::Scalar;
 
 /// Solve the linear system A * x = b using Gaussian elimination with partial pivoting.
 ///
-/// `a` is an n×n matrix stored as a Vec of Vecs (row-major).
-/// `b` is the right-hand side vector of length n.
-///
-/// Returns the solution vector x, or an error if the matrix is singular.
+/// Delegates to `crate::core::compute::matrix::solve_linear`, the canonical
+/// implementation. This wrapper is retained for backward-compatible access
+/// from the `runtime::solver` module.
 #[allow(clippy::needless_range_loop)]
 pub fn solve_linear_dense(a: &[Vec<Scalar>], b: &[Scalar]) -> Result<Vec<Scalar>, SimError> {
-    let n = a.len();
-    if n == 0 {
-        return Ok(Vec::new());
-    }
-    if a[0].len() != n {
-        return Err(SimError::numerical("matrix is not square"));
-    }
-    if b.len() != n {
-        return Err(SimError::numerical("RHS length does not match matrix size"));
-    }
-
-    // Create augmented matrix [A | b]
-    let mut aug: Vec<Vec<Scalar>> = a.to_vec();
-    for i in 0..n {
-        aug[i].push(b[i]);
-    }
-
-    // Forward elimination with partial pivoting
-    for col in 0..n {
-        // Find pivot (largest absolute value in this column, from row col downward)
-        let mut max_row = col;
-        let mut max_val = aug[col][col].abs();
-        for row in (col + 1)..n {
-            let val = aug[row][col].abs();
-            if val > max_val {
-                max_val = val;
-                max_row = row;
-            }
-        }
-
-        // Check for singularity
-        if max_val < 1e-15 {
-            return Err(SimError::numerical(
-                "matrix is singular (zero pivot in Gaussian elimination)",
-            ));
-        }
-
-        // Swap rows if needed
-        if max_row != col {
-            aug.swap(col, max_row);
-        }
-
-        // Eliminate below pivot
-        let pivot = aug[col][col];
-        for row in (col + 1)..n {
-            let factor = aug[row][col] / pivot;
-            for j in col..(n + 1) {
-                aug[row][j] -= factor * aug[col][j];
-            }
-        }
-    }
-
-    // Back substitution
-    let mut x = vec![0.0; n];
-    for i in (0..n).rev() {
-        let mut sum = aug[i][n];
-        for j in (i + 1)..n {
-            sum -= aug[i][j] * x[j];
-        }
-        x[i] = sum / aug[i][i];
-    }
-
-    Ok(x)
+    crate::core::compute::matrix::solve_linear(a, b)
 }
 
 /// Check if a square matrix is singular (determinant near zero).
@@ -88,8 +25,41 @@ pub fn solve_linear_dense(a: &[Vec<Scalar>], b: &[Scalar]) -> Result<Vec<Scalar>
 /// Uses the infinity norm of the matrix and attempts LU decomposition.
 /// If the maximum pivot magnitude is below `tol * norm`, the matrix is
 /// considered singular.
-pub fn is_singular(a: &[Vec<Scalar>], _tol: Scalar) -> bool {
-    solve_linear_dense(a, &vec![0.0; a.len()]).is_err()
+pub fn is_singular(a: &[Vec<Scalar>], tol: Scalar) -> bool {
+    if a.is_empty() {
+        return true;
+    }
+    let n = a.len();
+    if a[0].len() != n {
+        return true;
+    }
+    // A matrix is singular if its smallest pivot magnitude is below tol.
+    // Use LU decomposition without full solve to check.
+    let mut lu = a.to_vec();
+    for k in 0..n {
+        let mut max_val = lu[k][k].abs();
+        let mut max_row = k;
+        for i in k + 1..n {
+            let val = lu[i][k].abs();
+            if val > max_val {
+                max_val = val;
+                max_row = i;
+            }
+        }
+        if max_val < tol {
+            return true;
+        }
+        if max_row != k {
+            lu.swap(k, max_row);
+        }
+        for i in k + 1..n {
+            let factor = lu[i][k] / lu[k][k];
+            for j in k + 1..n {
+                lu[i][j] -= factor * lu[k][j];
+            }
+        }
+    }
+    false
 }
 
 /// Compute the infinity norm of a matrix (max row sum of absolute values).

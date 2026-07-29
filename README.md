@@ -29,9 +29,24 @@ SCIcoRS is a universal simulation kernel designed to unify all engineering and s
   - Optics, acoustics, board-level/PCB, power electronics, RF/microwave
   - Structural, thermal, fluid, multibody, aerospace, quantum, astrophysics
   - Chemical, physiological, and biomedical processes
-- Multi-physics coupling and cross-scale integration
-- Advanced post-processing, visualization, and reporting
-- Cross-platform, scripting, plugin, and cloud/distributed support
+- **3D Capabilities:** 3D Navier-Stokes (projection method), 3D FDTD (Yee algorithm), 3D heat conduction (ADI/SOR), 3D antenna radiation patterns
+- **Advanced Fluid Dynamics:** 2D/3D incompressible NS, 2D compressible NS (Roe scheme), turbulence models (k-ε RANS, Smagorinsky LES), multiphase flow (VOF)
+- **Nonlinear FEA:** Newton-Raphson solver, geometric stiffness, material nonlinearity
+- **Quantum Simulation:** State vectors, density matrices, Matrix Product States (MPS tensor networks), VQE/QAOA/Grover/HHL/QFT algorithms, Lindblad master equation
+- **Astrophysics & Plasma:** N-body, ΛCDM cosmology, 2D Magnetohydrodynamics (HLL Riemann solver)
+- **Multi-physics coupling and cross-scale integration:** Unified coupling bus with field mapping and convergence control
+- **Advanced post-processing, visualization, and reporting:** Streaming data recording, offline analysis (RMS/FFT), batch simulation, HIL support
+- **Cross-platform, scripting, plugin, and cloud/distributed support:** STEP/STL/Mesh I/O, Python interface stubs, plugin system, platform detection
+
+## Compute Platform
+- Unified `core::compute` module: matrix operations, vector ops, FFT, quadrature, eigenvalue solvers (Jacobi, subspace iteration)
+- Parallel execution via rayon for compute-intensive loops
+- All domain modules delegate math to `core::compute` (eliminated 5 copies of Gaussian elimination)
+
+## Test Status
+- **1606 tests** passing, 0 failed, 0 ignored
+- Zero clippy warnings (`-D warnings`)
+- Release build with LTO fat
 
 ## Roadmap (Phases)
 1. Core Model Kernel (Block/Port/Link/Diagram)

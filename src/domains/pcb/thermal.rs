@@ -104,8 +104,39 @@ impl Block for PcbThermalBlock {
 }
 
 /// Hot spot temperature estimation (simplified).
-pub fn hot_spot_temperature(_power_map: &[Vec<Scalar>], _via_count: usize, _board_thickness: Scalar, _copper_coverage: Scalar) -> Scalar {
-    85.0
+pub fn hot_spot_temperature(
+    power_map: &[Vec<Scalar>],
+    via_count: usize,
+    board_thickness: Scalar,
+    copper_coverage: Scalar,
+) -> Scalar {
+    if power_map.is_empty() || power_map[0].is_empty() {
+        return 25.0;
+    }
+
+    let mut total_power: Scalar = 0.0;
+    let mut peak_power: Scalar = 0.0;
+    let mut cell_count: Scalar = 0.0;
+    for row in power_map {
+        for &power in row {
+            let power = power.max(0.0);
+            total_power += power;
+            peak_power = peak_power.max(power);
+            cell_count += 1.0;
+        }
+    }
+
+    if cell_count <= 0.0 {
+        return 25.0;
+    }
+
+    let mean_power = total_power / cell_count;
+    let via_factor = 1.0 / (1.0 + via_count as Scalar * 0.08);
+    let thickness_factor = (board_thickness.max(0.2) / 1.6).clamp(0.25, 4.0);
+    let copper_factor = (1.0 - copper_coverage.clamp(0.0, 1.0)) * 0.75 + 0.25;
+    let thermal_load = 0.6 * peak_power + 0.4 * mean_power;
+
+    25.0 + thermal_load * 35.0 * thickness_factor * copper_factor * via_factor
 }
 
 #[cfg(test)]
@@ -137,5 +168,19 @@ mod tests {
         assert_eq!(*b.id(), "thermal1");
         b.init().unwrap();
         b.output().unwrap();
+    }
+
+    #[test]
+    fn test_hot_spot_temperature_increases_with_power() {
+        let low = hot_spot_temperature(&[vec![1.0, 1.0], vec![1.0, 1.0]], 2, 1.6, 0.4);
+        let high = hot_spot_temperature(&[vec![4.0, 4.0], vec![4.0, 4.0]], 2, 1.6, 0.4);
+        assert!(high > low);
+    }
+
+    #[test]
+    fn test_hot_spot_temperature_improves_with_vias_and_copper() {
+        let base = hot_spot_temperature(&[vec![3.0, 3.0], vec![3.0, 3.0]], 0, 1.6, 0.1);
+        let cooled = hot_spot_temperature(&[vec![3.0, 3.0], vec![3.0, 3.0]], 8, 1.6, 0.8);
+        assert!(cooled < base);
     }
 }

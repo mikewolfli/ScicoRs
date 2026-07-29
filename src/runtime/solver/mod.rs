@@ -21,10 +21,10 @@ pub mod traits;
 
 pub use adaptive::{CashKarp, RK23, RK45};
 pub use dae::DaeSolver;
-pub use fixed_step::{Euler, Heun, Midpoint, RK4};
-pub use linear::{matrix_inf_norm, solve_linear_dense, vector_inf_norm, is_singular, SparseMatrix};
+pub use fixed_step::{Euler, Heun, Midpoint, RK4, RK4_A, RK4_B, RK4_C};
+pub use linear::{SparseMatrix, is_singular, matrix_inf_norm, solve_linear_dense, vector_inf_norm};
 pub use nonlinear::NewtonRaphson;
 pub use stiff::{BDF2, BackwardEuler, Trapezoidal};
 pub use traits::{
-    adapt_step_size, finite_diff_jacobian, OdeSolver, SolverConfig, SolverStats, SolverStepResult,
+    OdeSolver, SolverConfig, SolverStats, SolverStepResult, adapt_step_size, finite_diff_jacobian,
 };

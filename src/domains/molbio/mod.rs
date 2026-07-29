@@ -33,3 +33,6 @@ pub use forcefield::{
 };
 pub use molecule::{Atom, Bond, Molecule, Residue};
 pub use physics::{ANGSTROM, AVOGADRO, KB, KCAL_TO_KJ, QE, T_300K, bond_parameters, element_mass};
+
+pub mod ewald;
+pub mod shake_rattle;

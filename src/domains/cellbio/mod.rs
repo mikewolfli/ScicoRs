@@ -33,3 +33,5 @@ pub use physics::{
     TYPICAL_CELL_DIAMETER, TYPICAL_DOUBLING_TIME, TYPICAL_SEEDING_DENSITY, diffusion_coefficient,
     water_density, water_viscosity,
 };
+
+pub mod immune_model;

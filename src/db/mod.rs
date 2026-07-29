@@ -19,15 +19,19 @@
 //!
 //! # Usage
 //!
-//! ```rust,ignore
-//! let db = LibraryDb::open("resources/db/index.db")?;
-//! let manager = LibraryManager::new(db);
+//! ```rust,no_run
+//! # use scico_rs::db::{DbConfig, LibraryCategory, LibraryManager};
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let config = DbConfig::default();
+//! let manager = LibraryManager::new(config)?;
 //!
 //! // Search for a material
 //! let results = manager.search("copper", Some(LibraryCategory::Material))?;
 //!
 //! // Load entry parameters
 //! let copper = manager.load_entry("material/copper")?;
+//! # Ok(())
+//! # }
 //! ```
 
 use rusqlite::{Connection, OpenFlags, params};

@@ -30,12 +30,13 @@ pub struct MnaSolution {
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// let mut mna = MnaMatrix::new(3, 0);
+/// ```rust
+/// use scico_rs::domains::analog::mna::MnaMatrix;
+/// let mut mna = MnaMatrix::new(1, 0);
 /// mna.stamp_resistor(1, 0, 1000.0);  // R1 = 1kΩ between node 1 and ground
 /// mna.stamp_current_source(0, 1, 0.01); // I1 = 10mA into node 1
 /// let sol = mna.solve().unwrap();
-/// println!("V(1) = {} V", sol.node_voltages[1]);
+/// assert!((sol.node_voltages[0] - 10.0).abs() < 1e-9);
 /// ```
 #[derive(Debug, Clone)]
 pub struct MnaMatrix {
@@ -156,26 +157,45 @@ impl MnaMatrix {
     pub fn stamp_vccs(&mut self, ni: usize, nj: usize, nk: usize, nl: usize, gm: Scalar) {
         // Helper: column index for a node; returns None for ground (node 0).
         let col = |node: usize| -> Option<usize> {
-            if node > 0 && node <= self.num_nodes { Some(node - 1) } else { None }
+            if node > 0 && node <= self.num_nodes {
+                Some(node - 1)
+            } else {
+                None
+            }
         };
         let ctrl_pos = col(nk);
         let ctrl_neg = col(nl);
 
         if let Some(ni_idx) = col(ni) {
-            if let Some(cp) = ctrl_pos { self.g[ni_idx][cp] += gm; }
-            if let Some(cn) = ctrl_neg { self.g[ni_idx][cn] -= gm; }
+            if let Some(cp) = ctrl_pos {
+                self.g[ni_idx][cp] += gm;
+            }
+            if let Some(cn) = ctrl_neg {
+                self.g[ni_idx][cn] -= gm;
+            }
         }
         if let Some(nj_idx) = col(nj) {
-            if let Some(cp) = ctrl_pos { self.g[nj_idx][cp] -= gm; }
-            if let Some(cn) = ctrl_neg { self.g[nj_idx][cn] += gm; }
+            if let Some(cp) = ctrl_pos {
+                self.g[nj_idx][cp] -= gm;
+            }
+            if let Some(cn) = ctrl_neg {
+                self.g[nj_idx][cn] += gm;
+            }
         }
     }
 
     /// Stamp a VCVS: V_out = A * (V_nk - V_nl).
     ///
     /// Voltage source vsrc_idx has value A * (V_nk - V_nl).
-    pub fn stamp_vcvs(&mut self, ni: usize, nj: usize, _nk: usize, _nl: usize,
-                      _a: Scalar, vsrc_idx: usize) {
+    pub fn stamp_vcvs(
+        &mut self,
+        ni: usize,
+        nj: usize,
+        _nk: usize,
+        _nl: usize,
+        _a: Scalar,
+        vsrc_idx: usize,
+    ) {
         // Model: insert a voltage source with E = A*(Vnk - Vnl)
         // C matrix row: connects the voltage source
         // B column: contributes to KVL equation
@@ -258,70 +278,23 @@ impl MnaMatrix {
 // ──────────────────────────────────────────────
 
 /// Solve A*x = b using Gaussian elimination with partial pivoting.
-#[allow(clippy::needless_range_loop, clippy::manual_memcpy)]
-fn solve_linear_system(a: &mut [Vec<Scalar>], b: &mut [Scalar], n: usize) -> Result<MnaSolution, SimError> {
+///
+/// Delegates to the canonical `crate::core::compute::matrix::solve_linear`.
+fn solve_linear_system(
+    a: &mut [Vec<Scalar>],
+    b: &mut [Scalar],
+    n: usize,
+) -> Result<MnaSolution, SimError> {
     if n == 0 {
         return Ok(MnaSolution {
             node_voltages: Vec::new(),
             source_currents: Vec::new(),
         });
     }
-
-    // Augmented matrix
-    let mut aug = vec![vec![0.0; n + 1]; n];
-    for i in 0..n {
-        for j in 0..n {
-            aug[i][j] = a[i][j];
-        }
-        aug[i][n] = b[i];
-    }
-
-    // Forward elimination with partial pivoting
-    for col in 0..n {
-        // Find pivot
-        let mut max_row = col;
-        let mut max_val = aug[col][col].abs();
-        for row in (col + 1)..n {
-            let val = aug[row][col].abs();
-            if val > max_val {
-                max_val = val;
-                max_row = row;
-            }
-        }
-
-        // Check for singular matrix
-        if max_val < 1e-15 {
-            return Err(SimError::numerical(
-                format!("singular MNA matrix at column {}", col),
-            ));
-        }
-
-        // Swap rows
-        if max_row != col {
-            aug.swap(col, max_row);
-        }
-
-        // Eliminate below
-        for row in (col + 1)..n {
-            let factor = aug[row][col] / aug[col][col];
-            for j in col..=n {
-                aug[row][j] -= factor * aug[col][j];
-            }
-        }
-    }
-
-    // Back substitution
-    let mut x = vec![0.0; n];
-    for i in (0..n).rev() {
-        let mut sum = aug[i][n];
-        for j in (i + 1)..n {
-            sum -= aug[i][j] * x[j];
-        }
-        x[i] = sum / aug[i][i];
-    }
-
-    // All values returned — caller must split based on context.
-    // The MnaMatrix::solve() handles the split properly using self.num_nodes.
+    // Extract the n×n submatrix and n-length RHS
+    let a_mat: Vec<Vec<Scalar>> = a[..n].iter().map(|r| r[..n].to_vec()).collect();
+    let b_vec: Vec<Scalar> = b[..n].to_vec();
+    let x = crate::core::compute::matrix::solve_linear(&a_mat, &b_vec)?;
     Ok(MnaSolution {
         node_voltages: x,
         source_currents: Vec::new(),
@@ -458,7 +431,8 @@ mod tests {
             mna.stamp_resistor(2, 0, 2000.0);
             mna.stamp_current_source(0, 1, 0.003);
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
         // I_total = 3mA, R_total = 3kΩ, V1 = 9V, V2 = 6V
         assert!((sol.node_voltages[0] - 9.0).abs() < 1e-10);
         assert!((sol.node_voltages[1] - 6.0).abs() < 1e-10);

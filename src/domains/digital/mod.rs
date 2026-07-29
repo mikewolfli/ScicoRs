@@ -26,3 +26,5 @@ pub use sequential::{
 pub use combinational::{ALUBlock, ALUOp, AdderBlock, DecoderBlock, MultiplierBlock};
 pub use cpu::{PipelineStages, SimpleCpu, CpuInstruction, CpuProgram};
 pub use timing::{GateConnection, TimingAnalyzer};
+
+pub mod event_driven;

@@ -20,11 +20,12 @@
 //! - **Component**: reusable component template system
 //! - **DiagramSer**: JSON/TOML serialization
 //! - **DiagramValidate**: diagram validation rules
-//! - **Coord** (Phase 10): coordinate systems (empty placeholder)
-//! - **Units** (Phase 11): units & dimensions (empty placeholder)
+//! - **Coord** (Phase 10): coordinate systems (fully implemented — 1D/2D/3D, Cartesian/polar/cylindrical/spherical, Transform4x4)
+//! - **Units** (Phase 11): units & dimensions (fully implemented — 7 SI base dimensions, derived dimensions, Unit/Quantity with conversion)
 
 pub mod block;
 pub mod component;
+pub mod compute;
 pub mod coord;
 pub mod dependency;
 pub mod diagram;
@@ -43,6 +44,7 @@ pub mod units;
 
 pub use block::{Block, BlockError, SimpleBlock};
 pub use component::{ComponentInstance, ComponentTemplate};
+pub use coord::{Coord1D, Coord2D, Coord3D, CoordSystem, Transform4x4};
 pub use dependency::{DependencyDecl, DependencySet};
 pub use diagram::Diagram;
 pub use diagram_ser::{diagram_to_json, diagram_to_toml, json_to_diagram, toml_to_diagram};
@@ -54,10 +56,9 @@ pub use param::{ExpressionParameter, Parameter, ParameterSet};
 pub use port::Port;
 pub use signal::{BusSignal, ContinuousSignal, DiscreteSignal, EventSignal, Signal};
 pub use state::{ContinuousStateVar, DiscreteStateVar, StateDeclaration};
-pub use coord::{Coord1D, Coord2D, Coord3D, CoordSystem, Transform4x4};
 pub use tensor::{Tensor, TensorDims};
-pub use units::{Dimension, Quantity, Unit};
 pub use types::{
     ComponentStatus, EPSILON, ExecutionPhase, Extent, Index, PortDirection, Rate, Scalar,
     SignalType, SignalValue, Time,
 };
+pub use units::{Dimension, Quantity, Unit};

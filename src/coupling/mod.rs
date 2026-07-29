@@ -1,8 +1,31 @@
-//! Multi-Physics Coupling Bus (Phase 32)
+#![allow(
+    clippy::type_complexity,
+    clippy::needless_question_mark,
+    clippy::format_push_string,
+    clippy::useless_format
+)]
+
+//! Multi-Physics Coupling Bus (Phase 32).
 //!
-//! Placeholder for:
-//! - Multi-physics interface standards
-//! - Field mapping, interpolation, projection
+//! Provides a unified coupling bus for multi-physics simulation:
+//! - Physics field type registry
+//! - Field mapping & interpolation between meshes
 //! - Cross-scale coupling (nano → micro → meter → cosmic)
-//! - Dimension auto-matching, unit auto-conversion
-//! - Unified convergence control, solver scheduling, time sync
+//! - Convergence control & coupling iteration scheduling
+
+pub mod bus;
+pub mod convergence;
+pub mod cross_scale;
+pub mod field_mapping;
+
+pub use bus::FieldMappingMethod;
+pub use bus::{
+    CouplingBus, CouplingInterface, FieldData, PhysicsField, QuantityType, TimeSyncMode,
+};
+pub use convergence::{ConvergenceCriteria, CouplingScheduler, TimeSyncManager};
+pub use cross_scale::{CrossScaleCoupling, RveHomogenization, ScaleBridge, ScaleLevel};
+pub use field_mapping::{FieldMapper, RbfType};
+
+// Integration tests (only compiled in test mode)
+#[cfg(test)]
+mod integration_tests;
