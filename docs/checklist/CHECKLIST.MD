@@ -148,6 +148,14 @@ Legend: ✅ implemented & tested | ⬜ not implemented
 - [x] `examples/matmul_bench.rs` observable proof (release, 512³ f64): naive 3.08 → SIMD 32.7 GFLOPS (**10.6×**) → SIMD+rayon 60.0 GFLOPS (**19.5×**), max |Δ| = 6e-14
 - [x] 5 tests (simd dgemm/dgemv vs reference, SIMD/parallel mat_mul vs naive, large gemv vs reference)
 
+## NEW — Dense O(n³) Solve Acceleration (numpy/MKL-like) [100% ✅ (2026-07-31)]
+- [x] Vectorized inner loops (pivot-row snapshot + zip iterators, pure safe code): `lu_decompose`, `determinant`, `inverse`, `solve_linear`, `cholesky_cpu` — 1.7–3.4× (lu_solve 2.8→8.9, determinant 3.1→10.7, solve_linear ~3→8.8, inverse 1.5→3.7 GFLOPS)
+- [x] Blocked Cholesky (`cholesky_blocked`, dpotrf-style, n≥96, block 64): scalar diagonal block + trsm + syrk via in-place strided SIMD gemm (`simd::dgemm_strided` α=−1,β=1) — cholesky 512 = **10.1 GFLOPS**; verified vs reference at 96/110/128/160/200 + round-trip
+- [x] `simd::dgemm_strided` — safe strided gemm (validated bounds/strides, same single audited unsafe boundary)
+- [x] LU-based `inverse` for n≥96 (`inverse_lu`): factor once + matrix forward/back substitution (split_at_mut, vectorized), ≈1.33n³ vs Gauss-Jordan ≈2n³ — inverse 300 **13.2→7.4 ms (1.78×)**; verified vs identity + inline Gauss-Jordan reference
+- [x] `examples/compute_bench.rs` — comprehensive map of all heavy ops (mat_mul/gemv/BLAS-1/lu/cholesky/qr/det/inverse/solve_linear/fft/integration); remaining weak spots: qr (MGS column access) and fft (memory-bound)
+- [x] 8 tests (strided gemm ×2, blocked cholesky ×2, inverse_lu ×2, +2 new simd) — total +6 → **1869 lib + 2 doc**
+
 ## Engine Dataflow Fixes (2026-07-31 Session 2)
 - [x] `update_inputs` wired into `engine.step()` — propagated signals now actually reach block input ports (previously zero call sites → multi-block diagrams were inert)
 - [x] Continuous-state sync: `Block::read_state`/`write_state` + `collect_state_from_blocks`/`push_state_to_blocks` — integrated state now written back into blocks (Integrator/TransferFunction/StateSpace were frozen)
@@ -184,7 +192,8 @@ Legend: ✅ implemented & tested | ⬜ not implemented
 | NEW | BLAS/LAPACK-style linalg (numpy/MKL-like) | 100% ✅ |
 | NEW | Vendor BLAS adaptive selection (MKL/ACML/ESSL/cuBLAS) | 100% ✅ |
 | NEW | Pure-Rust SIMD fast path (matrixmultiply) — real acceleration | 100% ✅ |
+| NEW | Dense O(n³) solve acceleration (vectorized + blocked Cholesky + LU inverse) | 100% ✅ |
 
 **Quality gates:** `cargo build` ✅ · `cargo clippy --all-targets -- -D warnings` zero ✅ ·
-`cargo test` 1863 lib + 2 doc-tests, 0 failed, 0 ignored ✅ · no `todo!()`/`unimplemented!()`/empty
+`cargo test` 1869 lib + 2 doc-tests, 0 failed, 0 ignored ✅ · no `todo!()`/`unimplemented!()`/empty
 stubs in production code ✅ · English comments ✅

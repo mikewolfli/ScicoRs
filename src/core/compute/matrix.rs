@@ -205,11 +205,13 @@ pub fn determinant(a: &[Vec<Scalar>]) -> Result<Scalar, SimError> {
             lu.swap(k, max_row);
             sign = -sign;
         }
+        let pivot = lu[k][k];
+        let pivot_row: Vec<Scalar> = lu[k][k + 1..].to_vec();
         for i in k + 1..n {
-            let factor = lu[i][k] / lu[k][k];
+            let factor = lu[i][k] / pivot;
             lu[i][k] = factor;
-            for j in k + 1..n {
-                lu[i][j] -= factor * lu[k][j];
+            for (a, &p) in lu[i][k + 1..].iter_mut().zip(pivot_row.iter()) {
+                *a -= factor * p;
             }
         }
     }
@@ -228,6 +230,12 @@ pub fn inverse(a: &[Vec<Scalar>]) -> Result<Vec<Vec<Scalar>>, SimError> {
     }
     if a[0].len() != n {
         return Err(SimError::numerical("inverse: matrix is not square"));
+    }
+    // Large matrices use the LU-based path (≈1.33n³ with vectorized forward /
+    // back substitution) instead of Gauss-Jordan (≈2n³). Results are
+    // identical to machine precision.
+    if n >= INVERSE_LU_MIN {
+        return inverse_lu(a);
     }
 
     // Augmented matrix [A | I]
@@ -258,14 +266,17 @@ pub fn inverse(a: &[Vec<Scalar>]) -> Result<Vec<Vec<Scalar>>, SimError> {
         }
 
         let pivot = aug[col][col];
-        for j in 0..2 * n {
-            aug[col][j] /= pivot;
+        for v in aug[col].iter_mut() {
+            *v /= pivot;
         }
+        // Snapshot the (now normalized) pivot row once; the row eliminations
+        // below then vectorize (disjoint source/destination slices).
+        let pivot_row: Vec<Scalar> = aug[col].clone();
         for row in 0..n {
             if row != col {
                 let factor = aug[row][col];
-                for j in 0..2 * n {
-                    aug[row][j] -= factor * aug[col][j];
+                for (a, &p) in aug[row].iter_mut().zip(pivot_row.iter()) {
+                    *a -= factor * p;
                 }
             }
         }
@@ -279,6 +290,63 @@ pub fn inverse(a: &[Vec<Scalar>]) -> Result<Vec<Vec<Scalar>>, SimError> {
         }
     }
     Ok(inv)
+}
+
+/// Matrices at least this large use the LU-based inverse path.
+const INVERSE_LU_MIN: usize = 96;
+
+/// LU-based inverse: `A⁻¹ = U⁻¹·L⁻¹·P`.
+///
+/// Factors once (`A = P⁻¹·L·U`) then performs matrix forward/back
+/// substitution on all `n` columns at once. The substitution inner loops are
+/// row-wise axpys over disjoint slices, so they auto-vectorize; total work is
+/// ≈1.33n³ vs ≈2n³ for the Gauss-Jordan path. Singularity detection uses the
+/// LU factor's tolerance (pivot < 1e-300).
+fn inverse_lu(a: &[Vec<Scalar>]) -> Result<Vec<Vec<Scalar>>, SimError> {
+    let n = a.len();
+    let (lu, piv) = crate::core::compute::linalg::lu_decompose(a)?;
+    // X (flat row-major) starts as the permutation P: X[i][piv[i]] = 1, so
+    // column c of X is the permuted RHS e_c (matching `lu_solve`).
+    let mut xf = vec![0.0; n * n];
+    for i in 0..n {
+        xf[i * n + piv[i]] = 1.0;
+    }
+    // Forward substitution: L·X = P (L is unit lower triangular). Row i uses
+    // rows j < i (already final); `split_at_mut` gives disjoint borrows of the
+    // two rows so the axpy auto-vectorizes.
+    for i in 0..n {
+        for j in 0..i {
+            let l = lu[i][j];
+            let (low, high) = xf.split_at_mut(i * n);
+            let xj = &low[j * n..(j + 1) * n];
+            let xi = &mut high[..n];
+            for (a, &p) in xi.iter_mut().zip(xj.iter()) {
+                *a -= l * p;
+            }
+        }
+    }
+    // Back substitution: U·X = L⁻¹·P → X = A⁻¹. Row i uses rows j > i.
+    for i in (0..n).rev() {
+        for j in i + 1..n {
+            let u = lu[i][j];
+            let (low, high) = xf.split_at_mut(j * n);
+            let xi = &mut low[i * n..(i + 1) * n];
+            let xj = &high[..n];
+            for (a, &p) in xi.iter_mut().zip(xj.iter()) {
+                *a -= u * p;
+            }
+        }
+        let d = lu[i][i];
+        for v in xf[i * n..(i + 1) * n].iter_mut() {
+            *v /= d;
+        }
+    }
+    // Rebuild Vec<Vec>.
+    let mut x = Vec::with_capacity(n);
+    for i in 0..n {
+        x.push(xf[i * n..(i + 1) * n].to_vec());
+    }
+    Ok(x)
 }
 
 /// Solve A * x = b using Gaussian elimination with partial pivoting.
@@ -317,13 +385,14 @@ pub fn solve_linear(a: &[Vec<Scalar>], b: &[Scalar]) -> Result<Vec<Scalar>, SimE
         }
 
         let pivot = aug[col][col];
-        for j in col..=n {
-            aug[col][j] /= pivot;
+        for v in aug[col].iter_mut().skip(col) {
+            *v /= pivot;
         }
+        let pivot_row: Vec<Scalar> = aug[col][col..=n].to_vec();
         for row in col + 1..n {
             let factor = aug[row][col];
-            for j in col..=n {
-                aug[row][j] -= factor * aug[col][j];
+            for (a, &p) in aug[row][col..=n].iter_mut().zip(pivot_row.iter()) {
+                *a -= factor * p;
             }
         }
     }
@@ -578,6 +647,88 @@ mod tests {
         assert!((i[0][1]).abs() < 1e-10);
         assert!((i[1][0]).abs() < 1e-10);
         assert!((i[1][1] - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_inverse_lu_path_matches_identity() {
+        // 120 ≥ INVERSE_LU_MIN → exercises the LU-based fast path; A·A⁻¹ = I.
+        let n = 120;
+        let a: Vec<Vec<Scalar>> = (0..n)
+            .map(|i| {
+                (0..n)
+                    .map(|j| {
+                        let v = ((i * 7 + j * 3) % 97) as Scalar * 0.05
+                            + if i == j { 3.0 } else { 0.0 };
+                        v
+                    })
+                    .collect()
+            })
+            .collect();
+        let inv = inverse(&a).unwrap();
+        let prod = mat_mul(&a, &inv).unwrap();
+        for i in 0..n {
+            for j in 0..n {
+                let want = if i == j { 1.0 } else { 0.0 };
+                assert!(
+                    (prod[i][j] - want).abs() < 1e-6,
+                    "A·A⁻¹ mismatch at ({i},{j}): {} vs {want}",
+                    prod[i][j]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_inverse_lu_matches_gauss_jordan() {
+        // The LU path (n ≥ 96) must equal Gauss-Jordan on the same matrix.
+        // Implement a small Gauss-Jordan reference inline for comparison.
+        fn gauss_jordan_inverse(a: &[Vec<Scalar>]) -> Vec<Vec<Scalar>> {
+            let n = a.len();
+            let mut aug = vec![vec![0.0; 2 * n]; n];
+            for i in 0..n {
+                for j in 0..n {
+                    aug[i][j] = a[i][j];
+                }
+                aug[i][n + i] = 1.0;
+            }
+            for col in 0..n {
+                let pivot = aug[col][col];
+                for j in 0..2 * n {
+                    aug[col][j] /= pivot;
+                }
+                for row in 0..n {
+                    if row != col {
+                        let factor = aug[row][col];
+                        for j in 0..2 * n {
+                            aug[row][j] -= factor * aug[col][j];
+                        }
+                    }
+                }
+            }
+            (0..n).map(|i| aug[i][n..].to_vec()).collect()
+        }
+        let n = 100;
+        let a: Vec<Vec<Scalar>> = (0..n)
+            .map(|i| {
+                (0..n)
+                    .map(|j| {
+                        ((i * 11 + j * 5) % 89) as Scalar * 0.1 + if i == j { 5.0 } else { 0.0 }
+                    })
+                    .collect()
+            })
+            .collect();
+        let lu_inv = inverse(&a).unwrap();
+        let gj_inv = gauss_jordan_inverse(&a);
+        for i in 0..n {
+            for j in 0..n {
+                assert!(
+                    (lu_inv[i][j] - gj_inv[i][j]).abs() < 1e-6,
+                    "LU vs Gauss-Jordan inverse mismatch at ({i},{j}): {} vs {}",
+                    lu_inv[i][j],
+                    gj_inv[i][j]
+                );
+            }
+        }
     }
 
     #[test]

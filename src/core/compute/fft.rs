@@ -37,15 +37,23 @@ pub fn fft(data: &mut [Scalar]) -> Result<(), String> {
         }
     }
 
+    // Twiddle table: W_n^k = exp(-2πi·k/n) for k in 0..n/2. Computed once (n/2
+    // trig calls instead of n·log₂n/2 per FFT) and indexed per stage, so the
+    // butterfly inner loop contains zero transcendental calls.
+    let mut tw = Vec::with_capacity(n / 2);
+    for k in 0..n / 2 {
+        let ang = -2.0 * std::f64::consts::PI * k as Scalar / n as Scalar;
+        tw.push((ang.cos(), ang.sin()));
+    }
+
     // Cooley-Tukey radix-2 DIT
     let mut len = 2;
     while len <= n {
         let half_len = len / 2;
-        let angle = -std::f64::consts::PI / half_len as Scalar;
+        let step = n / len; // table stride for this stage (W_{len}^j = W_n^{j·step})
         for i in (0..n).step_by(len) {
             for j in 0..half_len {
-                let w_re = (angle * j as Scalar).cos();
-                let w_im = (angle * j as Scalar).sin();
+                let (w_re, w_im) = tw[j * step];
 
                 let even_idx = 2 * (i + j);
                 let odd_idx = 2 * (i + j + half_len);

@@ -188,11 +188,15 @@ pub fn lu_decompose(a: &[Vec<Scalar>]) -> Result<LuResult, SimError> {
             piv.swap(k, max_i);
         }
         let pivot = lu[k][k];
+        // Snapshot the pivot row into a temporary Vec (O(n) per pivot, O(n²)
+        // total — negligible vs the O(n³) update). The trailing update then
+        // reads a disjoint buffer, so LLVM can auto-vectorize the axpy.
+        let pivot_row: Vec<Scalar> = lu[k][k + 1..].to_vec();
         for i in (k + 1)..n {
             let factor = lu[i][k] / pivot;
             lu[i][k] = factor;
-            for j in (k + 1)..n {
-                lu[i][j] -= factor * lu[k][j];
+            for (a, &p) in lu[i][k + 1..].iter_mut().zip(pivot_row.iter()) {
+                *a -= factor * p;
             }
         }
     }
@@ -253,10 +257,137 @@ pub(crate) fn lu_solve_cpu(a: &[Vec<Scalar>], b: &[Scalar]) -> Result<Vec<Scalar
 pub fn cholesky(a: &[Vec<Scalar>]) -> Result<Vec<Vec<Scalar>>, SimError> {
     let dispatcher = backend::global();
     let work = a.len().saturating_mul(a.len());
+    // Large SPD systems get the blocked (BLAS-3) kernel with SIMD syrk updates;
+    // everything else uses the reference. Both return identical factors.
+    let large = a.len() >= CHOL_BLOCK_MIN;
     match dispatcher.kind_for(work) {
-        BackendKind::VendorCpu => dispatcher.vendor_or_cpu(|v| v.cholesky(a), || cholesky_cpu(a)),
-        _ => cholesky_cpu(a),
+        BackendKind::VendorCpu => dispatcher.vendor_or_cpu(
+            |v| v.cholesky(a),
+            || {
+                if large {
+                    cholesky_blocked(a)
+                } else {
+                    cholesky_cpu(a)
+                }
+            },
+        ),
+        _ => {
+            if large {
+                cholesky_blocked(a)
+            } else {
+                cholesky_cpu(a)
+            }
+        }
     }
+}
+
+/// Matrices at least this large use the blocked kernel.
+const CHOL_BLOCK_MIN: usize = 96;
+
+/// Block size for the blocked Cholesky (columns per block).
+const CHOL_BLOCK: usize = 64;
+
+/// Blocked Cholesky (`dpotrf` style) on a flat row-major buffer.
+///
+/// Factorizes `A = L·Lᵀ` in column blocks:
+///   1. scalar Cholesky on the diagonal block (small, vectorized),
+///   2. `trsm`: `L21 = A21·L11⁻ᵀ` (forward substitution on the panel rows),
+///   3. `syrk`: `A22 ← A22 − L21·L21ᵀ` as an **in-place strided SIMD gemm**
+///      (`C ← −A·B + C`) — no extract/transpose/write-back copies, so the
+///      O(n³) trailing update runs at SIMD matrix-multiply speed.
+///
+/// Returns the same lower-triangular factor as [`cholesky_cpu`]; verified
+/// against it in tests.
+pub(crate) fn cholesky_blocked(a: &[Vec<Scalar>]) -> Result<Vec<Vec<Scalar>>, SimError> {
+    let n = a.len();
+    if n == 0 {
+        return Ok(Vec::new());
+    }
+    if a[0].len() != n {
+        return Err(SimError::numerical("cholesky: matrix is not square"));
+    }
+    // Flat row-major working copy.
+    let mut lf = Vec::with_capacity(n * n);
+    for row in a {
+        lf.extend_from_slice(row);
+    }
+
+    let mut s = 0usize;
+    while s < n {
+        let bs = (s + CHOL_BLOCK).min(n);
+        // 1. Scalar Cholesky on the diagonal block [s, bs)×[s, bs).
+        for i in s..bs {
+            for j in s..=i {
+                let mut sum = lf[i * n + j];
+                for t in s..j {
+                    sum -= lf[i * n + t] * lf[j * n + t];
+                }
+                if i == j {
+                    if sum <= 1e-300 {
+                        return Err(SimError::numerical(
+                            "cholesky: matrix is not positive definite",
+                        ));
+                    }
+                    lf[i * n + j] = sum.sqrt();
+                } else {
+                    lf[i * n + j] = sum / lf[j * n + j];
+                }
+            }
+        }
+        // 2. trsm: L21 = A21·L11⁻ᵀ (row-wise forward substitution, in place).
+        for i in bs..n {
+            for j in s..bs {
+                let mut sum = lf[i * n + j];
+                for t in s..j {
+                    sum -= lf[i * n + t] * lf[j * n + t];
+                }
+                lf[i * n + j] = sum / lf[j * n + j];
+            }
+        }
+        // 3. syrk: A22 ← A22 − L21·L21ᵀ. L21 is gathered into a separate
+        //    buffer (its region interleaves with C per row, so it cannot share
+        //    the mutable borrow), then C is updated in place via strided SIMD
+        //    gemm — no extract/write-back of the trailing block.
+        if bs < n {
+            let m2 = n - bs;
+            let k2 = bs - s;
+            let mut l21 = Vec::with_capacity(m2 * k2);
+            for rr in 0..m2 {
+                l21.extend_from_slice(&lf[(bs + rr) * n + s..(bs + rr) * n + bs]);
+            }
+            // B = L21ᵀ (k2×m2) from the contiguous L21.
+            let mut l21t = vec![0.0; k2 * m2];
+            for (c, v) in l21t.iter_mut().enumerate() {
+                let (cc, rr) = (c / m2, c % m2);
+                *v = l21[rr * k2 + cc];
+            }
+            // C region [bs..n, bs..n] of `lf` (single mutable borrow).
+            super::simd::dgemm_strided(
+                m2,
+                k2,
+                m2,
+                -1.0,
+                &l21,
+                k2 as isize,
+                1,
+                &l21t,
+                m2 as isize,
+                1,
+                1.0,
+                &mut lf[bs * n + bs..],
+                n as isize,
+                1,
+            );
+        }
+        s = bs;
+    }
+
+    // Rebuild the Vec<Vec> lower-triangular result.
+    let mut l = vec![vec![0.0; n]; n];
+    for i in 0..n {
+        l[i][..=i].copy_from_slice(&lf[i * n..i * n + i + 1]);
+    }
+    Ok(l)
 }
 
 /// CPU Cholesky (reference implementation, used directly by vendor mocks).
@@ -271,10 +402,14 @@ pub(crate) fn cholesky_cpu(a: &[Vec<Scalar>]) -> Result<Vec<Vec<Scalar>>, SimErr
     let mut l = vec![vec![0.0; n]; n];
     for i in 0..n {
         for j in 0..=i {
+            // Reduction over disjoint slices — zipped iterators let LLVM
+            // auto-vectorize the dot product.
             let mut sum = a[i][j];
-            for k in 0..j {
-                sum -= l[i][k] * l[j][k];
-            }
+            sum -= l[i][..j]
+                .iter()
+                .zip(l[j][..j].iter())
+                .map(|(&x, &y)| x * y)
+                .sum::<Scalar>();
             if i == j {
                 if sum <= 1e-300 {
                     return Err(SimError::numerical(
@@ -417,7 +552,11 @@ mod tests {
         // 128×96 = 12288 work units → exercises the SIMD (BLAS-3) fast path;
         // must equal the scalar reference within float tolerance.
         let a: Vec<Vec<Scalar>> = (0..128)
-            .map(|i| (0..96).map(|j| ((i * 17 - j * 5) as Scalar) * 0.25).collect())
+            .map(|i| {
+                (0..96)
+                    .map(|j| ((i * 17 - j * 5) as Scalar) * 0.25)
+                    .collect()
+            })
             .collect();
         let x: Vec<Scalar> = (0..96).map(|j| ((j * 3 + 1) as Scalar) * -0.5).collect();
         let y = gemv(&a, &x).unwrap();
@@ -494,6 +633,71 @@ mod tests {
     fn test_cholesky_not_pd() {
         let a = vec![vec![1.0, 2.0], vec![2.0, 1.0]];
         assert!(cholesky(&a).is_err());
+    }
+
+    fn rand_spd(n: usize) -> Vec<Vec<Scalar>> {
+        // B·Bᵀ + n·I is symmetric positive definite.
+        let mut x: u64 = 0x9E3779B97F4A7C15;
+        let b: Vec<Vec<Scalar>> = (0..n)
+            .map(|_| {
+                (0..n)
+                    .map(|_| {
+                        x ^= x << 13;
+                        x ^= x >> 7;
+                        x ^= x << 17;
+                        (x as f64 / u64::MAX as f64) * 2.0 - 1.0
+                    })
+                    .collect()
+            })
+            .collect();
+        let mut m = vec![vec![0.0; n]; n];
+        for i in 0..n {
+            for j in 0..n {
+                let mut s = 0.0;
+                for (bik, bjk) in b[i].iter().zip(b[j].iter()) {
+                    s += bik * bjk;
+                }
+                m[i][j] = s + if i == j { n as Scalar } else { 0.0 };
+            }
+        }
+        m
+    }
+
+    #[test]
+    fn test_cholesky_blocked_matches_reference() {
+        // Sizes that straddle the blocked threshold (96) and block size (32),
+        // including one with a partial trailing block (110 = 3×32 + 14).
+        for n in [96, 110, 128, 160, 200] {
+            let a = rand_spd(n);
+            let want = cholesky_cpu(&a).unwrap();
+            let got = cholesky_blocked(&a).unwrap();
+            for i in 0..n {
+                for j in 0..=i {
+                    assert!(
+                        (got[i][j] - want[i][j]).abs() < 1e-9,
+                        "blocked cholesky mismatch at n={n}, ({i},{j}): {} vs {}",
+                        got[i][j],
+                        want[i][j]
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_cholesky_blocked_roundtrip() {
+        let n = 128;
+        let a = rand_spd(n);
+        let l = cholesky_blocked(&a).unwrap();
+        for i in 0..n {
+            for j in 0..n {
+                let mut s = 0.0;
+                for (a_, b_) in l[i][..n].iter().zip(l[j][..n].iter()) {
+                    s += a_ * b_;
+                }
+                assert!((s - a[i][j]).abs() < 1e-8, "L·Lᵀ mismatch at ({i},{j})");
+            }
+        }
     }
 
     #[test]
