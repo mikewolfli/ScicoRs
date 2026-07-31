@@ -37,6 +37,88 @@ pub fn mat_mul(a: &[Vec<Scalar>], b: &[Vec<Scalar>]) -> Result<Vec<Vec<Scalar>>,
     }
 }
 
+/// Multiply two complex matrices: `C = A·B` (row-major, `num_complex::Complex64`).
+///
+/// Uses the real SIMD `mat_mul` four times via the block decomposition
+/// `(a+bi)(c+di) = (ac−bd) + (ad+bc)i`, so large quantum/dense complex
+/// products inherit the same acceleration as real ones.
+pub fn mat_mul_complex(
+    a: &[Vec<num_complex::Complex64>],
+    b: &[Vec<num_complex::Complex64>],
+) -> Result<Vec<Vec<num_complex::Complex64>>, SimError> {
+    use num_complex::Complex64;
+    if a.is_empty() || b.is_empty() {
+        return Ok(Vec::new());
+    }
+    let m = a.len();
+    let k = a[0].len();
+    if b.len() != k {
+        return Err(SimError::numerical(format!(
+            "mat_mul_complex: inner dimensions don't match: A cols={}, B rows={}",
+            k,
+            b.len()
+        )));
+    }
+    let n = b[0].len();
+    let ar: Vec<Vec<Scalar>> = a.iter().map(|r| r.iter().map(|c| c.re).collect()).collect();
+    let ai: Vec<Vec<Scalar>> = a.iter().map(|r| r.iter().map(|c| c.im).collect()).collect();
+    let br: Vec<Vec<Scalar>> = b.iter().map(|r| r.iter().map(|c| c.re).collect()).collect();
+    let bi: Vec<Vec<Scalar>> = b.iter().map(|r| r.iter().map(|c| c.im).collect()).collect();
+
+    let ac = mat_mul(&ar, &br)?;
+    let bd = mat_mul(&ai, &bi)?;
+    let ad = mat_mul(&ar, &bi)?;
+    let bc = mat_mul(&ai, &br)?;
+
+    let mut c = Vec::with_capacity(m);
+    for i in 0..m {
+        let mut row = Vec::with_capacity(n);
+        for j in 0..n {
+            row.push(Complex64::new(ac[i][j] - bd[i][j], ad[i][j] + bc[i][j]));
+        }
+        c.push(row);
+    }
+    Ok(c)
+}
+
+/// Multiply complex matrix by complex vector: `y = A·x`.
+///
+/// Small dims use the direct loop; large dims reuse [`mat_mul_complex`] with a
+/// one-column RHS.
+pub fn mat_vec_mul_complex(
+    a: &[Vec<num_complex::Complex64>],
+    x: &[num_complex::Complex64],
+) -> Result<Vec<num_complex::Complex64>, SimError> {
+    use num_complex::Complex64;
+    if a.is_empty() {
+        return Ok(Vec::new());
+    }
+    let m = a.len();
+    let n = a[0].len();
+    if x.len() != n {
+        return Err(SimError::numerical(format!(
+            "mat_vec_mul_complex: matrix cols={}, vector len={}",
+            n,
+            x.len()
+        )));
+    }
+    if m.saturating_mul(n) >= SIMD_MIN_WORK {
+        let col: Vec<Vec<Complex64>> = vec![x.to_vec()];
+        let prod = mat_mul_complex(a, &col)?;
+        Ok((0..m).map(|i| prod[i][0]).collect())
+    } else {
+        Ok((0..m)
+            .map(|i| {
+                let mut s = Complex64::new(0.0, 0.0);
+                for (j, &xj) in x.iter().enumerate() {
+                    s += a[i][j] * xj;
+                }
+                s
+            })
+            .collect())
+    }
+}
+
 /// Work units at which the SIMD kernel beats the naive loop (its flatten copy
 /// is O(n²), amortized by the O(n³) multiply).
 const SIMD_MIN_WORK: usize = 4096;
@@ -548,6 +630,104 @@ mod tests {
         assert!((c[0][1] - 22.0).abs() < 1e-10);
         assert!((c[1][0] - 43.0).abs() < 1e-10);
         assert!((c[1][1] - 50.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_mat_mul_complex_matches_reference() {
+        use num_complex::Complex64;
+        let a = vec![
+            vec![
+                Complex64::new(1.0, 2.0),
+                Complex64::new(3.0, -1.0),
+                Complex64::new(0.0, 0.5),
+            ],
+            vec![
+                Complex64::new(-2.0, 0.0),
+                Complex64::new(0.5, 1.0),
+                Complex64::new(1.0, 1.0),
+            ],
+        ];
+        let b = vec![
+            vec![Complex64::new(1.0, 1.0), Complex64::new(0.0, 1.0)],
+            vec![Complex64::new(2.0, 0.0), Complex64::new(-1.0, 0.5)],
+            vec![Complex64::new(0.5, 0.0), Complex64::new(1.0, -2.0)],
+        ];
+        let got = mat_mul_complex(&a, &b).unwrap();
+        // Reference direct computation.
+        let (m, k, n) = (2, 3, 2);
+        for i in 0..m {
+            for j in 0..n {
+                let mut s = Complex64::new(0.0, 0.0);
+                for t in 0..k {
+                    s += a[i][t] * b[t][j];
+                }
+                assert!(
+                    (got[i][j] - s).norm() < 1e-9,
+                    "mat_mul_complex mismatch at ({i},{j}): {} vs {s}",
+                    got[i][j]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_mat_mul_complex_large_matches_reference() {
+        // 48×48 complex → crosses the real SIMD threshold (each real product
+        // is 48³ = 110592 ≥ 4096); must equal the direct reference.
+        use num_complex::Complex64;
+        let n = 48;
+        let a: Vec<Vec<Complex64>> = (0..n)
+            .map(|i| {
+                (0..n)
+                    .map(|j| {
+                        Complex64::new(
+                            ((i * 7 + j * 3) % 19) as f64 * 0.1,
+                            ((i * 5 + j * 9) % 11) as f64 * 0.05,
+                        )
+                    })
+                    .collect()
+            })
+            .collect();
+        let b: Vec<Vec<Complex64>> = (0..n)
+            .map(|i| {
+                (0..n)
+                    .map(|j| {
+                        Complex64::new(
+                            ((i * 3 + j * 5) % 17) as f64 * 0.2,
+                            ((i + j) % 13) as f64 * 0.07,
+                        )
+                    })
+                    .collect()
+            })
+            .collect();
+        let got = mat_mul_complex(&a, &b).unwrap();
+        for i in 0..n {
+            for j in 0..n {
+                let mut s = Complex64::new(0.0, 0.0);
+                for t in 0..n {
+                    s += a[i][t] * b[t][j];
+                }
+                assert!(
+                    (got[i][j] - s).norm() < 1e-8,
+                    "large complex mismatch ({i},{j})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_mat_vec_mul_complex() {
+        use num_complex::Complex64;
+        let a = vec![
+            vec![Complex64::new(1.0, 0.0), Complex64::new(0.0, 1.0)],
+            vec![Complex64::new(2.0, -1.0), Complex64::new(0.0, 0.0)],
+        ];
+        let x = vec![Complex64::new(1.0, 1.0), Complex64::new(2.0, 0.0)];
+        let y = mat_vec_mul_complex(&a, &x).unwrap();
+        let want0 = Complex64::new(1.0, 1.0) + Complex64::new(0.0, 1.0) * Complex64::new(2.0, 0.0);
+        let want1 = Complex64::new(2.0, -1.0) * Complex64::new(1.0, 1.0);
+        assert!((y[0] - want0).norm() < 1e-10);
+        assert!((y[1] - want1).norm() < 1e-10);
     }
 
     #[test]

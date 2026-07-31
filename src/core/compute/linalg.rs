@@ -347,7 +347,9 @@ pub(crate) fn cholesky_blocked(a: &[Vec<Scalar>]) -> Result<Vec<Vec<Scalar>>, Si
         // 3. syrk: A22 ← A22 − L21·L21ᵀ. L21 is gathered into a separate
         //    buffer (its region interleaves with C per row, so it cannot share
         //    the mutable borrow), then C is updated in place via strided SIMD
-        //    gemm — no extract/write-back of the trailing block.
+        //    gemm — no extract/write-back of the trailing block. (A parallel
+        //    temp-buffer variant was tried and regressed: the syrk is a skinny
+        //    gemm whose spawn+copy overhead exceeds the multi-core gain.)
         if bs < n {
             let m2 = n - bs;
             let k2 = bs - s;
@@ -435,30 +437,166 @@ pub fn qr_decompose(a: &[Vec<Scalar>]) -> Result<QrResult, SimError> {
     let m = a.len();
     let n = if m > 0 { a[0].len() } else { 0 };
     let work = m.saturating_mul(n);
+    // Large problems use the blocked CGS2 (BLAS-3) kernel.
+    let large = m >= QR_BLOCK_MIN_EDGE && n >= QR_BLOCK_MIN_EDGE && work >= QR_BLOCK_MIN_WORK;
     match dispatcher.kind_for(work) {
-        BackendKind::VendorCpu => dispatcher.vendor_or_cpu(|v| v.qr(a), || qr_cpu(a)),
-        _ => qr_cpu(a),
+        BackendKind::VendorCpu => dispatcher.vendor_or_cpu(
+            |v| v.qr(a),
+            || {
+                if large { qr_blocked(a) } else { qr_cpu(a) }
+            },
+        ),
+        _ => {
+            if large {
+                qr_blocked(a)
+            } else {
+                qr_cpu(a)
+            }
+        }
     }
 }
 
+/// Smallest edge for the blocked QR kernel.
+const QR_BLOCK_MIN_EDGE: usize = 32;
+/// Work units at which the blocked (BLAS-3) QR beats the vectorized MGS.
+const QR_BLOCK_MIN_WORK: usize = 20000;
+/// Columns per block in the blocked QR.
+const QR_BLOCK: usize = 32;
+
+/// Blocked classical Gram-Schmidt with reorthogonalization (CGS2), BLAS-3.
+///
+/// For each column block `[s, e)`:
+///   1. **project** onto the already-orthogonalized `Q[:,0..s]`:
+///      `R = Qᵀ·A_block` and `V = A_block − Q·R_block` — both are SIMD `gemm`s;
+///   2. **CGS2** the block's `V` columns against each other (two passes keep
+///      the result orthonormal to machine precision).
+///
+/// Q is kept transposed (Qᵀ, `n×m`) so the per-column pass is contiguous.
+/// Returns the same `(q, r)` as [`qr_cpu`]; verified against it in tests.
+pub(crate) fn qr_blocked(a: &[Vec<Scalar>]) -> Result<QrResult, SimError> {
+    let m = a.len();
+    let n = if m > 0 { a[0].len() } else { 0 };
+    if m == 0 || n == 0 {
+        return Ok((Vec::new(), Vec::new()));
+    }
+    // Flat row-major A and transposed Q storage.
+    let mut af = Vec::with_capacity(m * n);
+    for row in a {
+        af.extend_from_slice(row);
+    }
+    let mut qt = vec![0.0; n * m];
+    let mut r = vec![vec![0.0; n]; n];
+
+    let mut s = 0usize;
+    while s < n {
+        let e = (s + QR_BLOCK).min(n);
+        let cols = e - s;
+        if s > 0 {
+            // R[0..s, s..e] = Q[:,0..s]ᵀ · A_block  (Qᵀ rows 0..s × A cols s..e).
+            let mut rb = vec![0.0; s * cols];
+            super::simd::dgemm_strided(
+                s,
+                m,
+                cols,
+                1.0,
+                &qt[..s * m],
+                m as isize,
+                1,
+                &af[s..],
+                n as isize,
+                1,
+                0.0,
+                &mut rb,
+                cols as isize,
+                1,
+            );
+            for k in 0..s {
+                for c in 0..cols {
+                    r[k][s + c] = rb[k * cols + c];
+                }
+            }
+            // V = A_block − Q[:,0..s]·R_block (Q[:,0..s] as a strided m×s view
+            // over Qᵀ rows; A_block updated in place).
+            super::simd::dgemm_strided(
+                m,
+                s,
+                cols,
+                -1.0,
+                &qt[..s * m],
+                1,
+                m as isize,
+                &rb,
+                cols as isize,
+                1,
+                1.0,
+                &mut af[s..],
+                n as isize,
+                1,
+            );
+        }
+        // CGS2 within the block: orthogonalize af[:, s..e] into qt[s..e].
+        for t in 0..cols {
+            let g = s + t;
+            let mut col: Vec<Scalar> = (0..m).map(|i| af[i * n + g]).collect();
+            for _pass in 0..2 {
+                for u in 0..t {
+                    let qk = &qt[(s + u) * m..(s + u + 1) * m];
+                    let dot: Scalar = col.iter().zip(qk.iter()).map(|(c, q)| c * q).sum();
+                    r[s + u][g] += dot;
+                    for (c, &q) in col.iter_mut().zip(qk.iter()) {
+                        *c -= dot * q;
+                    }
+                }
+            }
+            let norm: Scalar = col.iter().map(|c| c * c).sum::<Scalar>().sqrt();
+            if norm < 1e-300 {
+                return Err(SimError::numerical(
+                    "qr_decompose: linearly dependent columns",
+                ));
+            }
+            r[g][g] = norm;
+            let qj = &mut qt[g * m..(g + 1) * m];
+            for (c, &v) in qj.iter_mut().zip(col.iter()) {
+                *c = v / norm;
+            }
+        }
+        s = e;
+    }
+
+    // Transpose Qᵀ → Q (m×n).
+    let mut q = vec![vec![0.0; n]; m];
+    for i in 0..m {
+        for k in 0..n {
+            q[i][k] = qt[k * m + i];
+        }
+    }
+    Ok((q, r))
+}
+
 /// CPU QR (reference implementation, used directly by vendor mocks).
+///
+/// Modified Gram-Schmidt over **contiguous columns**: Q is kept transposed
+/// (Qᵀ, n×m) so every dot/axpy inner loop runs along a contiguous `m`-vector
+/// and auto-vectorizes, instead of strided column access into an m×n Q.
 pub(crate) fn qr_cpu(a: &[Vec<Scalar>]) -> Result<QrResult, SimError> {
     let m = a.len();
     let n = if m > 0 { a[0].len() } else { 0 };
     if m == 0 || n == 0 {
         return Ok((Vec::new(), Vec::new()));
     }
-    let mut q = vec![vec![0.0; n]; m];
+    // Qᵀ storage: row k is Q column k (length m, contiguous).
+    let mut qt = vec![0.0; n * m];
     let mut r = vec![vec![0.0; n]; n];
 
     for j in 0..n {
         // v_j = a_j (column j).
         let mut col: Vec<Scalar> = (0..m).map(|i| a[i][j]).collect();
         for k in 0..j {
-            let dot: Scalar = (0..m).map(|i| q[i][k] * col[i]).sum();
+            let qk = &qt[k * m..(k + 1) * m];
+            let dot: Scalar = col.iter().zip(qk.iter()).map(|(c, q)| c * q).sum();
             r[k][j] = dot;
-            for i in 0..m {
-                col[i] -= dot * q[i][k];
+            for (c, &q) in col.iter_mut().zip(qk.iter()) {
+                *c -= dot * q;
             }
         }
         let norm: Scalar = col.iter().map(|c| c * c).sum::<Scalar>().sqrt();
@@ -468,8 +606,17 @@ pub(crate) fn qr_cpu(a: &[Vec<Scalar>]) -> Result<QrResult, SimError> {
             ));
         }
         r[j][j] = norm;
-        for i in 0..m {
-            q[i][j] = col[i] / norm;
+        let qj = &mut qt[j * m..(j + 1) * m];
+        for (c, &v) in qj.iter_mut().zip(col.iter()) {
+            *c = v / norm;
+        }
+    }
+
+    // Transpose Qᵀ → Q (m×n).
+    let mut q = vec![vec![0.0; n]; m];
+    for i in 0..m {
+        for k in 0..n {
+            q[i][k] = qt[k * m + i];
         }
     }
     Ok((q, r))
@@ -730,6 +877,62 @@ mod tests {
                 let dot: Scalar = (0..m).map(|k| q[k][i] * q[k][j]).sum();
                 let expected = if i == j { 1.0 } else { 0.0 };
                 assert!((dot - expected).abs() < 1e-8);
+            }
+        }
+    }
+
+    fn rand_rect(rows: usize, cols: usize) -> Vec<Vec<Scalar>> {
+        let mut x: u64 = 0x9E3779B97F4A7C15;
+        (0..rows)
+            .map(|_| {
+                (0..cols)
+                    .map(|_| {
+                        x ^= x << 13;
+                        x ^= x >> 7;
+                        x ^= x << 17;
+                        (x as f64 / u64::MAX as f64) * 2.0 - 1.0
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_qr_blocked_matches_reference() {
+        // Sizes above the blocked threshold (20000 work, edge ≥ 32), including
+        // a partial trailing block (150 = 4×32 + 22) and a rectangular one.
+        for (m, n) in [(140, 140), (150, 150), (160, 90), (100, 64)] {
+            let a = rand_rect(m, n);
+            let (q_ref, r_ref) = qr_cpu(&a).unwrap();
+            let (q, r) = qr_blocked(&a).unwrap();
+            // Q·R must match A for both, and Qᵀ·Q must be identity.
+            for i in 0..m {
+                for j in 0..n {
+                    let mut rec = 0.0;
+                    for k in 0..n {
+                        rec += q[i][k] * r[k][j];
+                    }
+                    assert!(
+                        (rec - a[i][j]).abs() < 1e-8,
+                        "blocked Q·R≠A at {m}×{n}, ({i},{j}): {rec} vs {}",
+                        a[i][j]
+                    );
+                    let mut rec_ref = 0.0;
+                    for k in 0..n {
+                        rec_ref += q_ref[i][k] * r_ref[k][j];
+                    }
+                    assert!((rec_ref - a[i][j]).abs() < 1e-8);
+                }
+            }
+            for c1 in 0..n {
+                for c2 in 0..n {
+                    let dot: Scalar = (0..m).map(|k| q[k][c1] * q[k][c2]).sum();
+                    let expected = if c1 == c2 { 1.0 } else { 0.0 };
+                    assert!(
+                        (dot - expected).abs() < 1e-8,
+                        "blocked QᵀQ≠I at {m}×{n}, ({c1},{c2})"
+                    );
+                }
             }
         }
     }

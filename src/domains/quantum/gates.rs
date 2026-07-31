@@ -123,13 +123,8 @@ impl GateOperation {
     pub fn apply(&self, state: &QuantumState) -> Result<QuantumState, String> {
         let n = state.num_qubits;
         let mat = self.matrix(n);
-        let dim = 1 << n;
-        let mut new_amps = vec![ComplexScalar::new(0.0, 0.0); dim];
-        for i in 0..dim {
-            for j in 0..dim {
-                new_amps[i] += mat[i][j] * state.amplitudes[j];
-            }
-        }
+        let new_amps = crate::core::compute::matrix::mat_vec_mul_complex(&mat, &state.amplitudes)
+            .map_err(|e| e.message)?;
         Ok(QuantumState {
             amplitudes: new_amps,
             num_qubits: n,
@@ -143,19 +138,18 @@ impl GateOperation {
         if mat.len() != dim {
             return Err("Matrix dimension mismatch".to_string());
         }
-        // U * ρ * U†
-        let mut new_data = vec![ComplexScalar::new(0.0, 0.0); dim * dim];
-        for i in 0..dim {
-            for j in 0..dim {
-                let mut s = ComplexScalar::new(0.0, 0.0);
-                for k in 0..dim {
-                    for l in 0..dim {
-                        s += mat[i][k] * rho.data[k * dim + l] * mat[j][l].conj();
-                    }
-                }
-                new_data[i * dim + j] = s;
-            }
-        }
+        // ρ' = U·ρ·U† — two complex matrix multiplies (SIMD-accelerated).
+        let rho_mat: Vec<Vec<ComplexScalar>> = (0..dim)
+            .map(|i| rho.data[i * dim..(i + 1) * dim].to_vec())
+            .collect();
+        let tmp = crate::core::compute::matrix::mat_mul_complex(&mat, &rho_mat)
+            .map_err(|e| e.message)?;
+        let mat_dag: Vec<Vec<ComplexScalar>> = (0..dim)
+            .map(|j| (0..dim).map(|i| mat[i][j].conj()).collect())
+            .collect();
+        let out = crate::core::compute::matrix::mat_mul_complex(&tmp, &mat_dag)
+            .map_err(|e| e.message)?;
+        let new_data: Vec<ComplexScalar> = out.into_iter().flatten().collect();
         Ok(DensityMatrix {
             data: new_data,
             dim,

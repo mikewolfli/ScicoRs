@@ -53,6 +53,7 @@ pub use core::compute::linalg::{
     nrm2, qr_decompose, scal,
 };
 pub use core::compute::vendor_blas::{BlasVendor, VendorBlasBackend, detect_installed_vendors};
+pub use core::compute::vendor_ffi::{load_and_register_available, load_cpu_vendor, load_cublas};
 pub use core::coord::{Coord1D, Coord2D, Coord3D, CoordSystem, Transform4x4};
 pub use core::diagram::Diagram;
 pub use core::error::{ErrorCode, SimError};

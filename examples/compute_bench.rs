@@ -147,7 +147,7 @@ fn main() {
     let m = 320;
     let am = rand_mat(m);
     time(
-        "qr 320×320 (scalar MGS)",
+        "qr 320×320 (blocked CGS2)",
         2.0 * m as f64 * m as f64 * m as f64,
         16,
         || {
@@ -208,9 +208,9 @@ fn main() {
     });
 
     println!("-------------------------------------------------------------");
-    println!("mat_mul / gemv / BLAS-1 are SIMD/rayon accelerated; the dense O(n³)");
-    println!("solves (lu/cholesky/qr/determinant/inverse/solve_linear) and FFT are");
-    println!("still scalar loops — the next SIMD targets.");
+    println!("mat_mul / gemv / BLAS-1 are SIMD/rayon; dense solves use vectorized");
+    println!("LU/Cholesky + blocked CGS2 QR (gemm); FFT uses a twiddle table.");
+    println!("Every heavy op now has a real, observable fast path.");
 }
 
 fn rand_mat(n: usize) -> Vec<Vec<Scalar>> {

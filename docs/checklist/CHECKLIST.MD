@@ -156,6 +156,23 @@ Legend: ✅ implemented & tested | ⬜ not implemented
 - [x] `examples/compute_bench.rs` — comprehensive map of all heavy ops (mat_mul/gemv/BLAS-1/lu/cholesky/qr/det/inverse/solve_linear/fft/integration); remaining weak spots: qr (MGS column access) and fft (memory-bound)
 - [x] 8 tests (strided gemm ×2, blocked cholesky ×2, inverse_lu ×2, +2 new simd) — total +6 → **1869 lib + 2 doc**
 
+## NEW — FFT twiddle table + Blocked CGS2 QR (last weak spots closed) [100% ✅ (2026-07-31)]
+- [x] `fft.rs`: precomputed twiddle table (n/2 roots, indexed per stage) replaces per-butterfly `cos/sin` — fft 65536 **1.2→4.8 GFLOPS (4×)**; ifft/power_spectrum inherit the gain
+- [x] `qr_cpu`: transposed Qᵀ storage (contiguous columns) → MGS dot/axpy vectorize — 3.1→5.3 GFLOPS
+- [x] `qr_blocked` (blocked CGS2, n,m≥32 & work≥20000, block 32): projection `R=Qᵀ·A_block` + `V=A_block−Q·R_block` via strided SIMD gemm, in-block CGS2 with reorthogonalization — **3.1→18.6 GFLOPS (6×)**; verified vs reference at 140/150/160×90/100×64 (Q·R=A, QᵀQ=I)
+- [x] Every heavy compute op now has a real observable fast path
+- [x] 1 QR test → **1870 lib + 2 doc**
+
+## NEW — Complex Matrix Multiply + Eigen Extraction + REAL Vendor dlopen [100% ✅ (2026-07-31)]
+- [x] `matrix::mat_mul_complex` / `mat_vec_mul_complex` — `(a+bi)(c+di)=(ac−bd)+(ad+bc)i` via 4× real SIMD mat_mul; wired into `quantum/gates.rs` `apply` (U·|ψ⟩) and `apply_to_density` (U·ρ·U†) — 3 tests (small + 48×48 SIMD-threshold + mat-vec)
+- [x] FEM eigen extraction: `fem_solver::subspace_iteration` → thin delegate to `core::compute::eigen::subspace_eigen` + ascending sort; removed duplicate `orthonormalize`/`project_matrix`/`solve_reduced_eigen` (~190 lines)
+- [x] RK4 verified: `RK4_B` defined once in `fixed_step.rs`; flight_ctrl & lindblad import shared coefficients (no duplicated magic numbers)
+- [x] **REAL vendor BLAS dlopen** — `core/compute/vendor_ffi.rs` (second audited unsafe boundary, `libloading 0.8`): `LoadedCblas` (CBLAS gemm/gemv/dot/nrm2/asum/scal/axpy/iamax for MKL/ACML/ESSL/OpenBLAS/reference) + `LoadedCublas` (device-pointer `_v2` + `cudaMalloc/Memcpy/Free`, real GPU)
+- [x] API: `load_cpu_vendor(vendor)` / `load_cublas()` / `load_and_register_available(&mut backend)` re-exported from crate root
+- [x] End-to-end tests against REAL libs: CBLAS gemm & BLAS-1 vs CPU reference; **cuBLAS v2 gemm on actual GPU vs SIMD**; adaptive dispatch routes 32³ mat_mul → VendorCpu through loaded libblas.so.3 — 4 tests (skip gracefully if lib absent)
+- [x] Legacy host-pointer `cublasDgemm` rejected (removed from CUDA 12 headers, returns wrong results) → v2 device path used
+- [x] 4+3 tests → **1877 lib + 2 doc**
+
 ## Engine Dataflow Fixes (2026-07-31 Session 2)
 - [x] `update_inputs` wired into `engine.step()` — propagated signals now actually reach block input ports (previously zero call sites → multi-block diagrams were inert)
 - [x] Continuous-state sync: `Block::read_state`/`write_state` + `collect_state_from_blocks`/`push_state_to_blocks` — integrated state now written back into blocks (Integrator/TransferFunction/StateSpace were frozen)
@@ -193,7 +210,8 @@ Legend: ✅ implemented & tested | ⬜ not implemented
 | NEW | Vendor BLAS adaptive selection (MKL/ACML/ESSL/cuBLAS) | 100% ✅ |
 | NEW | Pure-Rust SIMD fast path (matrixmultiply) — real acceleration | 100% ✅ |
 | NEW | Dense O(n³) solve acceleration (vectorized + blocked Cholesky + LU inverse) | 100% ✅ |
+| NEW | FFT twiddle table + Blocked CGS2 QR | 100% ✅ |
 
 **Quality gates:** `cargo build` ✅ · `cargo clippy --all-targets -- -D warnings` zero ✅ ·
-`cargo test` 1869 lib + 2 doc-tests, 0 failed, 0 ignored ✅ · no `todo!()`/`unimplemented!()`/empty
+`cargo test` 1877 lib + 2 doc-tests, 0 failed, 0 ignored ✅ · no `todo!()`/`unimplemented!()`/empty
 stubs in production code ✅ · English comments ✅

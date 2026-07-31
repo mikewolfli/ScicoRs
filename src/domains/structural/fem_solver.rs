@@ -450,7 +450,9 @@ impl FemSystem {
 
     /// Subspace iteration for generalized eigenvalue problem K·φ = λ·M·φ.
     ///
-    /// Finds the smallest `n_modes` eigenvalues/vectors.
+    /// Finds the smallest `n_modes` eigenvalues/vectors. Thin wrapper over the
+    /// canonical `crate::core::compute::eigen::subspace_eigen`, with the
+    /// eigenpairs sorted ascending to match the FEM contract.
     fn subspace_iteration(
         k: &[Vec<Scalar>],
         m: &[Vec<Scalar>],
@@ -458,176 +460,17 @@ impl FemSystem {
         max_iter: usize,
         tolerance: Scalar,
     ) -> Result<(Vec<Scalar>, Vec<Vec<Scalar>>), String> {
-        let n = k.len();
-        let n_modes = n_modes.min(n);
-
-        // Initialize subspace with random vectors
-        let mut phi = vec![vec![0.0; n_modes]; n];
-        for j in 0..n_modes {
-            for i in 0..n {
-                phi[i][j] = (i * 31 + j * 17) as Scalar / n as Scalar;
-            }
-            // Orthonormalize w.r.t. M
-            Self::orthonormalize(&mut phi, m, j)?;
-        }
-
-        let mut prev_eigenvalues = vec![0.0; n_modes];
-
-        for _iter in 0..max_iter {
-            // Solve K·ψ = M·φ for each vector
-            let mut psi = vec![vec![0.0; n_modes]; n];
-            for j in 0..n_modes {
-                let mut rhs: Vec<Scalar> = (0..n)
-                    .map(|i| (0..n).map(|k_idx| m[i][k_idx] * phi[k_idx][j]).sum())
-                    .collect();
-                let mut k_copy = k.to_vec();
-                match Self::gauss_elimination(&mut k_copy, &mut rhs) {
-                    Ok(x) => {
-                        for i in 0..n {
-                            psi[i][j] = x[i];
-                        }
-                    }
-                    Err(_) => {
-                        // If singular, set to random
-                        for i in 0..n {
-                            psi[i][j] = (i * 7 + j * 13) as Scalar / (n + 1) as Scalar;
-                        }
-                    }
-                }
-            }
-
-            // Project: K_proj = ψ^T · K · ψ, M_proj = ψ^T · M · ψ
-            let k_proj = Self::project_matrix(k, &psi, n_modes);
-            let m_proj = Self::project_matrix(m, &psi, n_modes);
-
-            // Solve reduced eigenvalue problem using Jacobi iteration
-            let (eigenvalues, eigenvectors) = Self::solve_reduced_eigen(&k_proj, &m_proj, n_modes);
-
-            // Compute new subspace: φ = ψ · eigenvectors
-            let mut new_phi = vec![vec![0.0; n_modes]; n];
-            for i in 0..n {
-                for j in 0..n_modes {
-                    for k_idx in 0..n_modes {
-                        new_phi[i][j] += psi[i][k_idx] * eigenvectors[k_idx][j];
-                    }
-                }
-            }
-
-            // Orthonormalize
-            for j in 0..n_modes {
-                Self::orthonormalize(&mut new_phi, m, j)?;
-            }
-
-            phi = new_phi;
-
-            // Check convergence
-            let mut converged = true;
-            for j in 0..n_modes {
-                if (eigenvalues[j] - prev_eigenvalues[j]).abs()
-                    > tolerance * prev_eigenvalues[j].max(1.0)
-                {
-                    converged = false;
-                }
-                prev_eigenvalues[j] = eigenvalues[j];
-            }
-            if converged {
-                break;
-            }
-        }
-
-        Ok((prev_eigenvalues, phi))
-    }
-
-    /// Orthonormalize vector j against previous vectors w.r.t. M.
-    fn orthonormalize(phi: &mut [Vec<Scalar>], m: &[Vec<Scalar>], j: usize) -> Result<(), String> {
-        let n = phi.len();
-        // Gram-Schmidt
-        for k in 0..j {
-            // Compute inner product φ_k^T · M · φ_j
-            let mut inner = 0.0;
-            for i in 0..n {
-                let mut m_phi_k = 0.0;
-                for l in 0..n {
-                    m_phi_k += m[i][l] * phi[l][k];
-                }
-                inner += m_phi_k * phi[i][j];
-            }
-            for i in 0..n {
-                phi[i][j] -= inner * phi[i][k];
-            }
-        }
-        // Normalize: φ_j^T · M · φ_j = 1
-        let mut norm_sq = 0.0;
-        for i in 0..n {
-            let mut m_phi_j = 0.0;
-            for l in 0..n {
-                m_phi_j += m[i][l] * phi[l][j];
-            }
-            norm_sq += m_phi_j * phi[i][j];
-        }
-        if norm_sq <= 0.0 {
-            return Err("Zero norm in orthonormalization".to_string());
-        }
-        let inv_norm = 1.0 / norm_sq.sqrt();
-        for i in 0..n {
-            phi[i][j] *= inv_norm;
-        }
-        Ok(())
-    }
-
-    /// Project a matrix onto a subspace: A_proj = ψ^T · A · ψ
-    fn project_matrix(a: &[Vec<Scalar>], psi: &[Vec<Scalar>], n_modes: usize) -> Vec<Vec<Scalar>> {
-        let n = a.len();
-        // A_proj = ψ^T · A · ψ (size: n_modes × n_modes)
-        let mut result = vec![vec![0.0; n_modes]; n_modes];
-        let mut temp = vec![vec![0.0; n_modes]; n]; // A · ψ (n × n_modes)
-
-        for i in 0..n {
-            for j in 0..n_modes {
-                let mut sum = 0.0;
-                for k in 0..n {
-                    sum += a[i][k] * psi[k][j];
-                }
-                temp[i][j] = sum;
-            }
-        }
-
-        for i in 0..n_modes {
-            for j in 0..n_modes {
-                let mut sum = 0.0;
-                for k in 0..n {
-                    sum += psi[k][i] * temp[k][j];
-                }
-                result[i][j] = sum;
-            }
-        }
-
-        result
-    }
-
-    /// Solve the reduced eigenvalue problem using Jacobi iteration.
-    ///
-    /// Delegates to the canonical `crate::core::compute::eigen::jacobi_eigen`.
-    fn solve_reduced_eigen(
-        k_proj: &[Vec<Scalar>],
-        _m_proj: &[Vec<Scalar>],
-        n_modes: usize,
-    ) -> (Vec<Scalar>, Vec<Vec<Scalar>>) {
-        // After subspace orthonormalization w.r.t. M, M_proj ≈ I,
-        // so we solve K_proj · v = λ · v directly.
-        let (eigenvalues, eigenvectors) =
-            crate::core::compute::eigen::jacobi_eigen(k_proj, n_modes);
-
-        // Sort by eigenvalue magnitude (ascending)
-        let mut indices: Vec<usize> = (0..n_modes).collect();
-        indices.sort_by(|a, b| eigenvalues[*a].partial_cmp(&eigenvalues[*b]).unwrap());
-
-        let sorted_eigenvalues: Vec<Scalar> = indices.iter().map(|&i| eigenvalues[i]).collect();
-        let sorted_eigenvectors: Vec<Vec<Scalar>> = (0..n_modes)
-            .map(|i| (0..n_modes).map(|j| eigenvectors[j][indices[i]]).collect())
+        let (vals, vecs) =
+            crate::core::compute::eigen::subspace_eigen(k, m, n_modes, max_iter, tolerance)
+                .map_err(|e| e.message)?;
+        let nm = vals.len();
+        let mut indices: Vec<usize> = (0..nm).collect();
+        indices.sort_by(|a, b| vals[*a].partial_cmp(&vals[*b]).unwrap());
+        let sorted_vals: Vec<Scalar> = indices.iter().map(|&i| vals[i]).collect();
+        let sorted_vecs: Vec<Vec<Scalar>> = (0..nm)
+            .map(|r| (0..nm).map(|c| vecs[r][indices[c]]).collect())
             .collect();
-
-        (sorted_eigenvalues, sorted_eigenvectors)
+        Ok((sorted_vals, sorted_vecs))
     }
 }
 

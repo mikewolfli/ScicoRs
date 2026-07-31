@@ -25,6 +25,7 @@ pub mod matrix;
 pub mod simd;
 pub mod vector;
 pub mod vendor_blas;
+pub mod vendor_ffi;
 
 pub use backend::*;
 pub use eigen::*;
