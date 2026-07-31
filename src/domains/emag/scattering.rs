@@ -8,6 +8,9 @@ use crate::core::types::Scalar;
 use crate::domains::emag::fdtd3d::Fdtd3D;
 use crate::domains::emag::physics::C;
 
+/// Observation directions above which the RCS transform runs on rayon.
+const RCS_PAR_MIN: usize = 256;
+
 /// Compute bi-static RCS (radar cross-section) from an FDTD simulation.
 ///
 /// # Arguments
@@ -34,89 +37,100 @@ pub fn rcs_3d(
     let k0 = 2.0 * std::f64::consts::PI * frequency / C;
     let n_th = n_theta.max(1);
     let n_ph = n_phi.max(1);
-    let mut rcs = vec![vec![f64::NEG_INFINITY; n_ph]; n_th];
+    let n_dir = n_theta.saturating_mul(n_phi);
 
     // Incident field magnitude (plane wave approximation)
     let e0 = 1.0; // Unit incident field
 
-    for ti in 0..n_theta {
+    // Each observation direction is independent → parallel transform.
+    let compute = |idx: usize| -> Scalar {
+        let ti = idx / n_ph;
+        let pi = idx % n_ph;
         let obs_theta = std::f64::consts::PI * ti as Scalar / (n_theta - 1).max(1) as Scalar;
-        for pi in 0..n_phi {
-            let obs_phi = 2.0 * std::f64::consts::PI * pi as Scalar / (n_phi - 1).max(1) as Scalar;
+        let obs_phi = 2.0 * std::f64::consts::PI * pi as Scalar / (n_phi - 1).max(1) as Scalar;
 
-            // Observation unit vector
-            let ux = obs_theta.sin() * obs_phi.cos();
-            let uy = obs_theta.sin() * obs_phi.sin();
-            let uz = obs_theta.cos();
+        // Observation unit vector
+        let ux = obs_theta.sin() * obs_phi.cos();
+        let uy = obs_theta.sin() * obs_phi.sin();
+        let uz = obs_theta.cos();
 
-            // Near-field to far-field transformation
-            // Integrate equivalent currents on a box surrounding the scatterer
-            let mut e_scat = [0.0_f64; 3];
+        // Near-field to far-field transformation
+        // Integrate equivalent currents on a box surrounding the scatterer
+        let mut e_scat = [0.0_f64; 3];
 
-            // Contribution from the top face (z = nz-1)
-            for j in 0..ny {
-                for i in 0..nx {
-                    let ex = fdtd
-                        .ex
-                        .get(nz)
-                        .and_then(|p| p.get(j))
-                        .and_then(|r| r.get(i))
-                        .copied()
-                        .unwrap_or(0.0);
-                    let ey = fdtd
-                        .ey
-                        .get(nz)
-                        .and_then(|p| p.get(j))
-                        .and_then(|r| r.get(i + 1))
-                        .copied()
-                        .unwrap_or(0.0);
-                    let hx = fdtd
-                        .hx
-                        .get(nz - 1)
-                        .and_then(|p| p.get(j))
-                        .and_then(|r| r.get(i + 1))
-                        .copied()
-                        .unwrap_or(0.0);
-                    let hy = fdtd
-                        .hy
-                        .get(nz - 1)
-                        .and_then(|p| p.get(j))
-                        .and_then(|r| r.get(i))
-                        .copied()
-                        .unwrap_or(0.0);
+        // Contribution from the top face (z = nz-1)
+        for j in 0..ny {
+            for i in 0..nx {
+                let ex = fdtd
+                    .ex
+                    .get(nz)
+                    .and_then(|p| p.get(j))
+                    .and_then(|r| r.get(i))
+                    .copied()
+                    .unwrap_or(0.0);
+                let ey = fdtd
+                    .ey
+                    .get(nz)
+                    .and_then(|p| p.get(j))
+                    .and_then(|r| r.get(i + 1))
+                    .copied()
+                    .unwrap_or(0.0);
+                let hx = fdtd
+                    .hx
+                    .get(nz - 1)
+                    .and_then(|p| p.get(j))
+                    .and_then(|r| r.get(i + 1))
+                    .copied()
+                    .unwrap_or(0.0);
+                let hy = fdtd
+                    .hy
+                    .get(nz - 1)
+                    .and_then(|p| p.get(j))
+                    .and_then(|r| r.get(i))
+                    .copied()
+                    .unwrap_or(0.0);
 
-                    // Phase term: exp(j k·r)
-                    let phase = k0
-                        * (ux * i as Scalar * fdtd.dx
-                            + uy * j as Scalar * fdtd.dy
-                            + uz * (nz - 1) as Scalar * fdtd.dz);
-                    let (c, s) = phase.sin_cos();
+                // Phase term: exp(j k·r)
+                let phase = k0
+                    * (ux * i as Scalar * fdtd.dx
+                        + uy * j as Scalar * fdtd.dy
+                        + uz * (nz - 1) as Scalar * fdtd.dz);
+                let (c, s) = phase.sin_cos();
 
-                    // Equivalent electric and magnetic currents
-                    let js_x = hy;
-                    let js_y = -hx;
-                    let ms_x = -ey;
-                    let ms_y = ex;
+                // Equivalent electric and magnetic currents
+                let js_x = hy;
+                let js_y = -hx;
+                let ms_x = -ey;
+                let ms_y = ex;
 
-                    // Far-field E from equivalent currents (simplified)
-                    e_scat[0] += (js_x * c - ms_y * s) * fdtd.dx * fdtd.dy;
-                    e_scat[1] += (js_y * c + ms_x * s) * fdtd.dx * fdtd.dy;
-                }
+                // Far-field E from equivalent currents (simplified)
+                e_scat[0] += (js_x * c - ms_y * s) * fdtd.dx * fdtd.dy;
+                e_scat[1] += (js_y * c + ms_x * s) * fdtd.dx * fdtd.dy;
             }
-
-            // RCS: σ = lim_{r→∞} 4πr² |E_scat|² / |E_inc|²
-            let e_sq = e_scat[0] * e_scat[0] + e_scat[1] * e_scat[1];
-            let sigma = if e0 > 0.0 && e_sq > 0.0 {
-                4.0 * std::f64::consts::PI * e_sq / (e0 * e0)
-            } else {
-                0.0
-            };
-            rcs[ti][pi] = if sigma > 0.0 {
-                10.0 * sigma.log10().max(-80.0)
-            } else {
-                -80.0
-            };
         }
+
+        // RCS: σ = lim_{r→∞} 4πr² |E_scat|² / |E_inc|²
+        let e_sq = e_scat[0] * e_scat[0] + e_scat[1] * e_scat[1];
+        let sigma = if e0 > 0.0 && e_sq > 0.0 {
+            4.0 * std::f64::consts::PI * e_sq / (e0 * e0)
+        } else {
+            0.0
+        };
+        if sigma > 0.0 {
+            10.0 * sigma.log10().max(-80.0)
+        } else {
+            -80.0
+        }
+    };
+    let flat: Vec<Scalar> = if n_dir >= RCS_PAR_MIN {
+        use rayon::prelude::*;
+        (0..n_dir).into_par_iter().map(compute).collect()
+    } else {
+        (0..n_dir).map(compute).collect()
+    };
+    let mut rcs = vec![vec![f64::NEG_INFINITY; n_ph]; n_th];
+    for idx in 0..n_dir {
+        rcs[idx / n_ph][idx % n_ph] = flat[idx];
     }
     rcs
 }

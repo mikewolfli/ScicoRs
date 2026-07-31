@@ -12,14 +12,28 @@ pub struct ParameterSweep {
 
 impl ParameterSweep {
     pub fn new(name: &str, values: Vec<Scalar>, template: &str, output: &str) -> Self {
-        Self { parameter_name: name.to_string(), values, diagram_template: template.to_string(), output_dir: output.to_string() }
+        Self {
+            parameter_name: name.to_string(),
+            values,
+            diagram_template: template.to_string(),
+            output_dir: output.to_string(),
+        }
     }
     pub fn run(&self) -> Result<Vec<String>, String> {
         let mut results = Vec::new();
         for (i, &val) in self.values.iter().enumerate() {
-            let output_path = format!("{}/sweep_{}_{}.json", self.output_dir, self.parameter_name, i);
-            std::fs::write(&output_path, format!("{{\"param\":\"{}\",\"value\":{}}}", self.parameter_name, val))
-                .map_err(|e| format!("Write error: {}", e))?;
+            let output_path = format!(
+                "{}/sweep_{}_{}.json",
+                self.output_dir, self.parameter_name, i
+            );
+            std::fs::write(
+                &output_path,
+                format!(
+                    "{{\"param\":\"{}\",\"value\":{}}}",
+                    self.parameter_name, val
+                ),
+            )
+            .map_err(|e| format!("Write error: {}", e))?;
             results.push(output_path);
         }
         Ok(results)
@@ -27,7 +41,12 @@ impl ParameterSweep {
 }
 
 /// Status of a batch task.
-pub enum BatchTaskStatus { Pending, Running, Completed(Vec<String>), Failed(String) }
+pub enum BatchTaskStatus {
+    Pending,
+    Running,
+    Completed(Vec<String>),
+    Failed(String),
+}
 
 /// A single batch task.
 pub struct BatchTask {
@@ -40,7 +59,13 @@ pub struct BatchTask {
 
 impl BatchTask {
     pub fn new(id: &str, config: &str, diagram: &str, output: &str) -> Self {
-        Self { id: id.to_string(), config_path: config.to_string(), diagram_path: diagram.to_string(), output_path: output.to_string(), status: BatchTaskStatus::Pending }
+        Self {
+            id: id.to_string(),
+            config_path: config.to_string(),
+            diagram_path: diagram.to_string(),
+            output_path: output.to_string(),
+            status: BatchTaskStatus::Pending,
+        }
     }
 }
 
@@ -51,8 +76,15 @@ pub struct BatchSimManager {
 }
 
 impl BatchSimManager {
-    pub fn new(max_parallel: usize) -> Self { Self { tasks: Vec::new(), max_parallel } }
-    pub fn add_task(&mut self, task: BatchTask) { self.tasks.push(task); }
+    pub fn new(max_parallel: usize) -> Self {
+        Self {
+            tasks: Vec::new(),
+            max_parallel,
+        }
+    }
+    pub fn add_task(&mut self, task: BatchTask) {
+        self.tasks.push(task);
+    }
 
     pub fn run_all(&mut self) -> Result<(), String> {
         for task in &mut self.tasks {
@@ -66,7 +98,10 @@ impl BatchSimManager {
     }
 
     pub fn results(&self) -> Vec<(&str, &BatchTaskStatus)> {
-        self.tasks.iter().map(|t| (t.id.as_str(), &t.status)).collect()
+        self.tasks
+            .iter()
+            .map(|t| (t.id.as_str(), &t.status))
+            .collect()
     }
 }
 
@@ -85,26 +120,53 @@ pub struct OptimizationLoop {
 }
 
 impl OptimizationLoop {
-    pub fn new(objective: &str, max_iter: usize) -> Self { Self { objective_fn: objective.to_string(), design_params: Vec::new(), max_iterations: max_iter } }
-    pub fn add_param(&mut self, param: DesignParam) { self.design_params.push(param); }
+    pub fn new(objective: &str, max_iter: usize) -> Self {
+        Self {
+            objective_fn: objective.to_string(),
+            design_params: Vec::new(),
+            max_iterations: max_iter,
+        }
+    }
+    pub fn add_param(&mut self, param: DesignParam) {
+        self.design_params.push(param);
+    }
 
     pub fn optimize_grid(&self) -> Result<(Vec<Scalar>, Scalar), String> {
-        if self.design_params.is_empty() { return Err("No design parameters".to_string()); }
+        if self.design_params.is_empty() {
+            return Err("No design parameters".to_string());
+        }
         let n = self.design_params.len();
         let steps = (self.max_iterations as Scalar / n as Scalar).ceil() as usize;
-        let mut best_params = vec![0.0; n];
-        let mut best_obj = Scalar::MAX;
+        let max_iter = self.max_iterations;
 
-        for i in 0..self.max_iterations {
-            let mut params = Vec::new();
+        // Each iteration's objective depends only on its index → iterations
+        // run on rayon with a min-reduction over (objective, params).
+        let candidate = |i: usize| -> (Scalar, Vec<Scalar>) {
+            let mut params = Vec::with_capacity(n);
             for (j, dp) in self.design_params.iter().enumerate() {
                 let t = ((i / (j + 1)) % steps) as Scalar / steps.max(1) as Scalar;
                 params.push(dp.min + t * (dp.max - dp.min));
             }
             // Simple objective: sum of squares
             let obj: Scalar = params.iter().map(|p| p * p).sum();
-            if obj < best_obj { best_obj = obj; best_params = params; }
-        }
+            (obj, params)
+        };
+
+        /// Iterations at which rayon pays for itself.
+        const PAR_MIN_ITERS: usize = 1024;
+        let best = if max_iter >= PAR_MIN_ITERS {
+            use rayon::prelude::*;
+            (0..max_iter)
+                .into_par_iter()
+                .map(candidate)
+                .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap())
+        } else {
+            (0..max_iter)
+                .map(candidate)
+                .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap())
+        };
+
+        let (best_obj, best_params) = best.unwrap_or((Scalar::MAX, vec![0.0; n]));
         Ok((best_params, best_obj))
     }
 }
@@ -123,12 +185,7 @@ pub struct SolverBenchmarkResult {
 }
 
 impl SolverBenchmarkResult {
-    pub fn new(
-        name: &str,
-        grid: (usize, usize, usize),
-        steps: usize,
-        elapsed_s: Scalar,
-    ) -> Self {
+    pub fn new(name: &str, grid: (usize, usize, usize), steps: usize, elapsed_s: Scalar) -> Self {
         let total_cells = grid.0 * grid.1 * grid.2;
         Self {
             name: name.to_string(),
@@ -269,8 +326,12 @@ pub fn benchmark_speedup(
         };
         md.push_str(&format!(
             "| {}×{}×{} | {:.0} | {:.0} | {:.2}× |\n",
-            b.grid_size.0, b.grid_size.1, b.grid_size.2,
-            b.steps_per_second, o.steps_per_second, speedup
+            b.grid_size.0,
+            b.grid_size.1,
+            b.grid_size.2,
+            b.steps_per_second,
+            o.steps_per_second,
+            speedup
         ));
     }
     md
@@ -282,10 +343,13 @@ mod tests {
     #[test]
     fn test_parameter_sweep() {
         let _ = std::fs::create_dir_all("/tmp/sweep_test");
-        let sweep = ParameterSweep::new("k", vec![1.0, 2.0, 3.0], "template.json", "/tmp/sweep_test");
+        let sweep =
+            ParameterSweep::new("k", vec![1.0, 2.0, 3.0], "template.json", "/tmp/sweep_test");
         let results = sweep.run().unwrap();
         assert_eq!(results.len(), 3);
-        for r in &results { let _ = std::fs::remove_file(r); }
+        for r in &results {
+            let _ = std::fs::remove_file(r);
+        }
         let _ = std::fs::remove_dir("/tmp/sweep_test");
     }
     #[test]
@@ -305,8 +369,16 @@ mod tests {
     #[test]
     fn test_optimization_loop() {
         let mut opt = OptimizationLoop::new("cost", 50);
-        opt.add_param(DesignParam { name: "x".to_string(), min: -1.0, max: 1.0 });
-        opt.add_param(DesignParam { name: "y".to_string(), min: -1.0, max: 1.0 });
+        opt.add_param(DesignParam {
+            name: "x".to_string(),
+            min: -1.0,
+            max: 1.0,
+        });
+        opt.add_param(DesignParam {
+            name: "y".to_string(),
+            min: -1.0,
+            max: 1.0,
+        });
         let (params, obj) = opt.optimize_grid().unwrap();
         assert_eq!(params.len(), 2);
         assert!(obj >= 0.0);
@@ -315,6 +387,43 @@ mod tests {
     fn test_optimization_no_params() {
         let opt = OptimizationLoop::new("cost", 10);
         assert!(opt.optimize_grid().is_err());
+    }
+    #[test]
+    fn test_optimize_grid_parallel_matches_serial_reference() {
+        // 2048 iterations > PAR_MIN_ITERS=1024 → rayon min-reduction path;
+        // verify the global optimum matches the original serial loop.
+        let mut opt = OptimizationLoop::new("f", 2048);
+        opt.add_param(DesignParam {
+            name: "a".into(),
+            min: -2.0,
+            max: 2.0,
+        });
+        opt.add_param(DesignParam {
+            name: "b".into(),
+            min: -1.0,
+            max: 1.0,
+        });
+        let (best_params, best_obj) = opt.optimize_grid().unwrap();
+
+        // Serial reference.
+        let n = 2;
+        let steps = (2048.0 / n as Scalar).ceil() as usize;
+        let mut ref_obj = Scalar::MAX;
+        for i in 0..2048usize {
+            let mut params = Vec::new();
+            for (j, dp) in opt.design_params.iter().enumerate() {
+                let t = ((i / (j + 1)) % steps) as Scalar / steps.max(1) as Scalar;
+                params.push(dp.min + t * (dp.max - dp.min));
+            }
+            let obj: Scalar = params.iter().map(|p| p * p).sum();
+            if obj < ref_obj {
+                ref_obj = obj;
+            }
+        }
+        assert_eq!(best_obj, ref_obj);
+        // best_params must actually achieve that objective.
+        let recomputed: Scalar = best_params.iter().map(|p| p * p).sum();
+        assert!((recomputed - best_obj).abs() < 1e-12);
     }
     // ── Benchmark tests ─────────────────────────────────────────────────
     #[test]
@@ -383,8 +492,7 @@ mod tests {
     }
     #[test]
     fn test_run_benchmark_suite() {
-        let config = SolverBenchConfig::new("suite_test", 5)
-            .with_grids(vec![(2, 2, 2), (3, 3, 3)]);
+        let config = SolverBenchConfig::new("suite_test", 5).with_grids(vec![(2, 2, 2), (3, 3, 3)]);
         let results = run_benchmark_suite(&config, &|grid| {
             let _g = grid;
             || Ok(())

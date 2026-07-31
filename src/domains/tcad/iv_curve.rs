@@ -3,9 +3,13 @@
 //! Provides functions to compute IV (current-voltage) and CV (capacitance-voltage)
 //! characteristic curves for MOSFET and BJT devices.
 
-use crate::core::types::Scalar;
-use super::mosfet::{MosfetModel, mosfet_drain_current};
 use super::bjt::{BjtModel, bjt_collector_current};
+use super::mosfet::{MosfetModel, mosfet_drain_current};
+use crate::core::types::Scalar;
+
+/// Bias points at which a curve sweep runs on rayon (each bias point is an
+/// independent device evaluation).
+const IV_PAR_MIN_POINTS: usize = 2048;
 
 // ──────────────────────────────────────────────
 // 1. MOSFET IV Curves
@@ -26,27 +30,35 @@ pub fn mosfet_iv_curve(
     vds_range: (Scalar, Scalar, usize),
     vbs: Scalar,
 ) -> Vec<(Scalar, Scalar, Scalar)> {
-    let mut points = Vec::new();
     let (vgs_start, vgs_stop, vgs_steps) = vgs_range;
     let (vds_start, vds_stop, vds_steps) = vds_range;
+    let total = vgs_steps * vds_steps;
 
-    for i in 0..vgs_steps {
+    // Each (vgs, vds) bias point is an independent device evaluation, so
+    // large curves are swept on rayon (order-preserving indexed collect).
+    let point = |idx: usize| -> (Scalar, Scalar, Scalar) {
+        let i = idx / vds_steps;
+        let j = idx % vds_steps;
         let vgs = if vgs_steps > 1 {
             vgs_start + (vgs_stop - vgs_start) * i as Scalar / (vgs_steps - 1) as Scalar
         } else {
             vgs_start
         };
-        for j in 0..vds_steps {
-            let vds = if vds_steps > 1 {
-                vds_start + (vds_stop - vds_start) * j as Scalar / (vds_steps - 1) as Scalar
-            } else {
-                vds_start
-            };
-            let id = mosfet_drain_current(model, vgs, vds, vbs);
-            points.push((vds, vgs, id));
-        }
+        let vds = if vds_steps > 1 {
+            vds_start + (vds_stop - vds_start) * j as Scalar / (vds_steps - 1) as Scalar
+        } else {
+            vds_start
+        };
+        let id = mosfet_drain_current(model, vgs, vds, vbs);
+        (vds, vgs, id)
+    };
+
+    if total >= IV_PAR_MIN_POINTS {
+        use rayon::prelude::*;
+        (0..total).into_par_iter().map(point).collect()
+    } else {
+        (0..total).map(point).collect()
     }
-    points
 }
 
 /// Compute MOSFET transfer curve (Id vs Vgs) at a fixed Vds.
@@ -130,22 +142,30 @@ pub fn bjt_iv_curve(
     vce_range: (Scalar, Scalar, usize),
 ) -> Vec<(Scalar, Scalar, Scalar)> {
     let (start, stop, steps) = vce_range;
-    let mut points = Vec::new();
+    let n_vbe = vbe_list.len();
+    let total = n_vbe * steps;
 
-    for &vbe in vbe_list {
-        for i in 0..steps {
-            let vce = if steps > 1 {
-                start + (stop - start) * i as Scalar / (steps - 1) as Scalar
-            } else {
-                start
-            };
-            // Vbc = Vb - Vc = Vbe + Ve - Vce - Ve = Vbe - Vce
-            let vbc = vbe - vce;
-            let ic = bjt_collector_current(model, vbe, vbc);
-            points.push((vce, vbe, ic));
-        }
+    let point = |idx: usize| -> (Scalar, Scalar, Scalar) {
+        let vbe_idx = idx / steps;
+        let i = idx % steps;
+        let vbe = vbe_list[vbe_idx];
+        let vce = if steps > 1 {
+            start + (stop - start) * i as Scalar / (steps - 1) as Scalar
+        } else {
+            start
+        };
+        // Vbc = Vb - Vc = Vbe + Ve - Vce - Ve = Vbe - Vce
+        let vbc = vbe - vce;
+        let ic = bjt_collector_current(model, vbe, vbc);
+        (vce, vbe, ic)
+    };
+
+    if total >= IV_PAR_MIN_POINTS {
+        use rayon::prelude::*;
+        (0..total).into_par_iter().map(point).collect()
+    } else {
+        (0..total).map(point).collect()
     }
-    points
 }
 
 /// Compute BJT transfer curve (Ic vs Vbe) at a fixed Vce.
@@ -240,5 +260,60 @@ mod tests {
         let ic_sat = curve.last().unwrap().2;
         let ic_linear = curve.first().unwrap().2;
         assert!(ic_sat.abs() >= ic_linear.abs());
+    }
+
+    #[test]
+    fn test_mosfet_iv_curve_parallel_matches_serial_reference() {
+        let model = MosfetModel::new_nmos();
+        // 64×64 = 4096 points > IV_PAR_MIN_POINTS → rayon path.
+        let curve = mosfet_iv_curve(&model, (0.0, 2.0, 64), (0.0, 2.0, 64), 0.0);
+        assert_eq!(curve.len(), 4096);
+
+        // Serial reference: original nested-loop order.
+        let mut ref_points = Vec::new();
+        for i in 0..64usize {
+            let vgs = 2.0 * i as Scalar / 63.0;
+            for j in 0..64usize {
+                let vds = 2.0 * j as Scalar / 63.0;
+                let id = mosfet_drain_current(&model, vgs, vds, 0.0);
+                ref_points.push((vds, vgs, id));
+            }
+        }
+        for (a, b) in curve.iter().zip(ref_points.iter()) {
+            let scale = a.2.abs().max(b.2.abs()).max(1e-12);
+            assert!(
+                (a.2 - b.2).abs() / scale < 1e-12,
+                "Id mismatch: {} vs {}",
+                a.2,
+                b.2
+            );
+        }
+    }
+
+    #[test]
+    fn test_bjt_iv_curve_parallel_matches_serial_reference() {
+        let model = BjtModel::new_npn();
+        // 4 × 512 = 2048 points → parallel path.
+        let vbe_list = [0.55, 0.6, 0.65, 0.7];
+        let curve = bjt_iv_curve(&model, &vbe_list, (0.0, 4.0, 512));
+        assert_eq!(curve.len(), 2048);
+
+        let mut ref_points = Vec::new();
+        for &vbe in &vbe_list {
+            for i in 0..512usize {
+                let vce = 4.0 * i as Scalar / 511.0;
+                let ic = bjt_collector_current(&model, vbe, vbe - vce);
+                ref_points.push((vce, vbe, ic));
+            }
+        }
+        for (a, b) in curve.iter().zip(ref_points.iter()) {
+            let scale = a.2.abs().max(b.2.abs()).max(1e-12);
+            assert!(
+                (a.2 - b.2).abs() / scale < 1e-12,
+                "Ic mismatch: {} vs {}",
+                a.2,
+                b.2
+            );
+        }
     }
 }

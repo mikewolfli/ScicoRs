@@ -8,6 +8,10 @@ use crate::core::types::Scalar;
 use crate::domains::cellbio::cell_model::CellPopulation;
 use crate::domains::cellbio::media::CultureMedia;
 use crate::domains::molbio::forcefield::Vec3;
+
+/// Interior cells above which the diffusion stencil runs on rayon (per-x-plane
+/// workers, Jacobi semantics → no data race).
+const DIFFUSE_PAR_MIN_CELLS: usize = 4096;
 use std::collections::HashMap;
 
 // ──────────────────────────────────────────────
@@ -139,11 +143,7 @@ impl GridModel {
             }
 
             // Apply diffusion: ∂c/∂t = D * ∇²c
-            let d_coeff = if name == "O2" {
-                2.1e-9
-            } else {
-                6.7e-10
-            };
+            let d_coeff = if name == "O2" { 2.1e-9 } else { 6.7e-10 };
 
             let diff_factor = d_coeff * dt / dx2;
             if diff_factor > 0.25 {
@@ -151,24 +151,44 @@ impl GridModel {
                 continue;
             }
 
-            #[allow(clippy::needless_range_loop)]
-            for i in 1..nx.saturating_sub(1) {
-                #[allow(clippy::needless_range_loop)]
-                for j in 1..ny.saturating_sub(1) {
-                    #[allow(clippy::needless_range_loop)]
-                    for k in 1..nz.saturating_sub(1) {
-                        let laplacian = curr[i + 1][j][k] + curr[i - 1][j][k]
-                            + curr[i][j + 1][k]
-                            + curr[i][j - 1][k]
-                            + curr[i][j][k + 1]
-                            + curr[i][j][k - 1]
-                            - 6.0 * curr[i][j][k];
-                        let new_val = curr[i][j][k] + diff_factor * laplacian;
-
-                        if name == "O2" {
-                            self.grid[i][j][k].o2_conc = new_val.max(0.0);
-                        } else if let Some(v) = self.grid[i][j][k].nutrients.get_mut(name.as_str()) {
-                            *v = new_val.max(0.0);
+            // Jacobi-style update (reads `curr` snapshot, writes `self.grid`),
+            // so interior cells are embarrassingly parallel over x-planes.
+            let interior = nx
+                .saturating_sub(2)
+                .saturating_mul(ny.saturating_sub(2))
+                .saturating_mul(nz.saturating_sub(2));
+            let update_cell = |i: usize, j: usize, k: usize, plane: &mut [Vec<GridCell>]| {
+                let laplacian = curr[i + 1][j][k]
+                    + curr[i - 1][j][k]
+                    + curr[i][j + 1][k]
+                    + curr[i][j - 1][k]
+                    + curr[i][j][k + 1]
+                    + curr[i][j][k - 1]
+                    - 6.0 * curr[i][j][k];
+                let new_val = curr[i][j][k] + diff_factor * laplacian;
+                if name == "O2" {
+                    plane[j][k].o2_conc = new_val.max(0.0);
+                } else if let Some(v) = plane[j][k].nutrients.get_mut(name.as_str()) {
+                    *v = new_val.max(0.0);
+                }
+            };
+            if interior >= DIFFUSE_PAR_MIN_CELLS {
+                use rayon::prelude::*;
+                self.grid.par_iter_mut().enumerate().for_each(|(i, plane)| {
+                    if i == 0 || i == nx - 1 {
+                        return;
+                    }
+                    for j in 1..ny.saturating_sub(1) {
+                        for k in 1..nz.saturating_sub(1) {
+                            update_cell(i, j, k, plane);
+                        }
+                    }
+                });
+            } else {
+                for i in 1..nx.saturating_sub(1) {
+                    for j in 1..ny.saturating_sub(1) {
+                        for k in 1..nz.saturating_sub(1) {
+                            update_cell(i, j, k, &mut self.grid[i]);
                         }
                     }
                 }
@@ -208,11 +228,7 @@ impl GridModel {
     }
 
     /// Complete growth step: diffuse → react → update cells.
-    pub fn step(
-        &mut self,
-        population: &mut CellPopulation,
-        dt: Scalar,
-    ) -> Result<(), String> {
+    pub fn step(&mut self, population: &mut CellPopulation, dt: Scalar) -> Result<(), String> {
         // Diffusion
         self.diffuse(dt);
 
@@ -240,7 +256,13 @@ impl GridModel {
             avg_nutrient /= count as Scalar;
             avg_o2 /= count as Scalar;
         }
-        let _ = population.update(dt, avg_nutrient, avg_o2, self.grid[0][0][0].ph, self.media.temperature);
+        let _ = population.update(
+            dt,
+            avg_nutrient,
+            avg_o2,
+            self.grid[0][0][0].ph,
+            self.media.temperature,
+        );
 
         Ok(())
     }
@@ -281,7 +303,12 @@ impl GridModel {
             let nx2 = x as isize + dx;
             let ny2 = y as isize + dy;
             let nz2 = z as isize + dz;
-            if nx2 >= 0 && nx2 < nx as isize && ny2 >= 0 && ny2 < ny as isize && nz2 >= 0 && nz2 < nz as isize
+            if nx2 >= 0
+                && nx2 < nx as isize
+                && ny2 >= 0
+                && ny2 < ny as isize
+                && nz2 >= 0
+                && nz2 < nz as isize
             {
                 total += 1;
                 if self.grid[nx2 as usize][ny2 as usize][nz2 as usize]
@@ -351,7 +378,9 @@ pub fn analyze_tissue_morphology(
         0.0
     };
 
-    let surface_area = 4.0 * std::f64::consts::PI * (total_volume / (4.0 / 3.0 * std::f64::consts::PI)).powf(2.0 / 3.0);
+    let surface_area = 4.0
+        * std::f64::consts::PI
+        * (total_volume / (4.0 / 3.0 * std::f64::consts::PI)).powf(2.0 / 3.0);
     let compactness = if surface_area > 0.0 {
         (36.0 * std::f64::consts::PI * total_volume * total_volume).powf(1.0 / 3.0) / surface_area
     } else {
@@ -433,7 +462,11 @@ mod tests {
             for i in 0..10 {
                 for j in 0..10 {
                     for k in 0..10 {
-                        total += grid.grid[i][j][k].nutrients.get("Glucose").copied().unwrap_or(0.0);
+                        total += grid.grid[i][j][k]
+                            .nutrients
+                            .get("Glucose")
+                            .copied()
+                            .unwrap_or(0.0);
                     }
                 }
             }
@@ -447,7 +480,11 @@ mod tests {
             for i in 0..10 {
                 for j in 0..10 {
                     for k in 0..10 {
-                        total += grid.grid[i][j][k].nutrients.get("Glucose").copied().unwrap_or(0.0);
+                        total += grid.grid[i][j][k]
+                            .nutrients
+                            .get("Glucose")
+                            .copied()
+                            .unwrap_or(0.0);
                     }
                 }
             }
@@ -456,6 +493,46 @@ mod tests {
 
         // Concentration should be approximately conserved
         assert!((final_total - initial_total).abs() < 1.0);
+    }
+
+    #[test]
+    fn test_diffuse_parallel_conservation() {
+        // 20×20×20 → interior 18³ = 5832 ≥ DIFFUSE_PAR_MIN_CELLS → rayon path.
+        let media = CultureMedia::new();
+        let mut grid = GridModel::new(20, 20, 20, 1e-5, media);
+        assert!(18 * 18 * 18 >= DIFFUSE_PAR_MIN_CELLS);
+        for i in 0..20 {
+            for j in 0..20 {
+                for k in 0..20 {
+                    grid.grid[i][j][k]
+                        .nutrients
+                        .insert("Glucose".to_string(), 25.0);
+                }
+            }
+        }
+        let total = |g: &GridModel| -> Scalar {
+            let mut s = 0.0;
+            for i in 0..g.dimensions.0 {
+                for j in 0..g.dimensions.1 {
+                    for k in 0..g.dimensions.2 {
+                        s += g.grid[i][j][k]
+                            .nutrients
+                            .get("Glucose")
+                            .copied()
+                            .unwrap_or(0.0);
+                    }
+                }
+            }
+            s
+        };
+        let before = total(&grid);
+        grid.diffuse(1.0);
+        let after = total(&grid);
+        // Parallel diffusion conserves total concentration (closed box).
+        assert!(
+            (after - before).abs() < 2.0,
+            "parallel diffuse not conserved: {before} -> {after}"
+        );
     }
 
     #[test]

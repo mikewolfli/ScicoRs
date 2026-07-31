@@ -188,15 +188,19 @@ pub fn run_dc_op(
 /// Run DC sweep analysis.
 ///
 /// Sweeps a source parameter and solves the MNA system at each step.
+/// Each sweep point is an independent MNA solve, so large sweeps run on
+/// rayon (order-preserving indexed collect); small sweeps stay serial to
+/// avoid pool-launch overhead.
 pub fn run_dc_sweep(
     num_nodes: usize,
     num_vsources: usize,
     config: &DcSweepConfig,
-    stamp_fn: impl Fn(&mut MnaMatrix, Scalar) -> Result<(), SimError>,
+    stamp_fn: impl Fn(&mut MnaMatrix, Scalar) -> Result<(), SimError> + Sync,
 ) -> Result<Vec<DcOpResult>, SimError> {
-    let mut results = Vec::with_capacity(config.steps);
+    /// Sweep points at which rayon pays for itself.
+    const PAR_MIN_STEPS: usize = 8;
 
-    for i in 0..config.steps {
+    let solve_point = |i: usize| -> Result<DcOpResult, SimError> {
         let value = if config.steps > 1 {
             config.start + (config.stop - config.start) * i as Scalar / (config.steps - 1) as Scalar
         } else {
@@ -215,14 +219,19 @@ pub fn run_dc_sweep(
         };
 
         let total_power = source_currents.iter().map(|i| i.abs()).sum();
-        results.push(DcOpResult {
+        Ok(DcOpResult {
             node_voltages,
             source_currents,
             total_power,
-        });
-    }
+        })
+    };
 
-    Ok(results)
+    if config.steps >= PAR_MIN_STEPS {
+        use rayon::prelude::*;
+        (0..config.steps).into_par_iter().map(solve_point).collect()
+    } else {
+        (0..config.steps).map(solve_point).collect()
+    }
 }
 
 /// Generate frequency points for AC sweep.
@@ -232,7 +241,9 @@ fn generate_freq_points(config: &AcSweepConfig) -> Vec<Scalar> {
             let mut freqs = Vec::with_capacity(config.points);
             for i in 0..config.points {
                 let f = if config.points > 1 {
-                    config.start_freq + (config.stop_freq - config.start_freq) * i as Scalar / (config.points - 1) as Scalar
+                    config.start_freq
+                        + (config.stop_freq - config.start_freq) * i as Scalar
+                            / (config.points - 1) as Scalar
                 } else {
                     config.start_freq
                 };
@@ -246,7 +257,10 @@ fn generate_freq_points(config: &AcSweepConfig) -> Vec<Scalar> {
             let log_stop = config.stop_freq.log10();
             for i in 0..config.points {
                 let f = if config.points > 1 {
-                    10.0_f64.powf(log_start + (log_stop - log_start) * i as Scalar / (config.points - 1) as Scalar)
+                    10.0_f64.powf(
+                        log_start
+                            + (log_stop - log_start) * i as Scalar / (config.points - 1) as Scalar,
+                    )
                 } else {
                     config.start_freq
                 };
@@ -259,7 +273,8 @@ fn generate_freq_points(config: &AcSweepConfig) -> Vec<Scalar> {
             let octaves = (config.stop_freq / config.start_freq).log2();
             for i in 0..config.points {
                 let f = if config.points > 1 {
-                    config.start_freq * 2.0_f64.powf(octaves * i as Scalar / (config.points - 1) as Scalar)
+                    config.start_freq
+                        * 2.0_f64.powf(octaves * i as Scalar / (config.points - 1) as Scalar)
                 } else {
                     config.start_freq
                 };
@@ -274,30 +289,48 @@ fn generate_freq_points(config: &AcSweepConfig) -> Vec<Scalar> {
 ///
 /// For each frequency point, solves the MNA system with capacitors and
 /// inductors represented by their complex impedances.
+/// Each frequency point is an independent MNA solve, so large sweeps run on
+/// rayon (order-preserving indexed collect).
 pub fn run_ac_sweep(
     num_nodes: usize,
     num_vsources: usize,
     config: &AcSweepConfig,
-    stamp_fn: impl Fn(&mut MnaMatrix, Scalar) -> Result<(), SimError>,
+    stamp_fn: impl Fn(&mut MnaMatrix, Scalar) -> Result<(), SimError> + Sync,
 ) -> Result<AcResult, SimError> {
-    let freqs = generate_freq_points(config);
-    let mut node_voltages_all = Vec::with_capacity(freqs.len());
+    /// Frequency points at which rayon pays for itself.
+    const PAR_MIN_POINTS: usize = 8;
 
-    for &freq in &freqs {
+    let freqs = generate_freq_points(config);
+
+    let solve_point = |freq: Scalar| -> Result<Vec<num_complex::Complex<Scalar>>, SimError> {
         let mut mna = MnaMatrix::new(num_nodes, num_vsources);
         stamp_fn(&mut mna, freq)?;
         let sol = mna.solve()?;
 
         // For AC analysis, we treat the DC solution as the real part
         // (a simplified approach — full AC analysis requires complex MNA)
-        let voltages: Vec<num_complex::Complex<Scalar>> = sol.node_voltages
+        Ok(sol
+            .node_voltages
             .iter()
             .take(num_nodes)
             .map(|&v| num_complex::Complex::new(v, 0.0))
-            .collect();
+            .collect())
+    };
 
-        node_voltages_all.push(voltages);
-    }
+    let node_voltages_all = if freqs.len() >= PAR_MIN_POINTS {
+        use rayon::prelude::*;
+        freqs
+            .par_iter()
+            .copied()
+            .map(solve_point)
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        freqs
+            .iter()
+            .copied()
+            .map(solve_point)
+            .collect::<Result<Vec<_>, _>>()?
+    };
 
     Ok(AcResult {
         freq: freqs,
@@ -349,7 +382,8 @@ mod tests {
             mna.stamp_resistor(2, 0, 1000.0);
             mna.stamp_current_source(0, 1, 0.005); // 5mA → V1 = 10V
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
         assert!((result.node_voltages[0] - 10.0).abs() < 1e-10);
         assert!((result.node_voltages[1] - 5.0).abs() < 1e-10);
     }
@@ -367,7 +401,8 @@ mod tests {
             mna.stamp_resistor(2, 0, 1000.0);
             mna.stamp_current_source(0, 1, value);
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
         assert_eq!(results.len(), 5);
         // V1 should increase with current
         assert!(results[0].node_voltages[0] < results[4].node_voltages[0]);
@@ -385,7 +420,8 @@ mod tests {
             mna.stamp_resistor(2, 0, 1000.0);
             mna.stamp_current_source(0, 1, 0.005);
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
         assert_eq!(result.time.len(), 11);
         assert_eq!(result.node_voltages.len(), 11);
     }
@@ -419,11 +455,75 @@ mod tests {
     }
 
     #[test]
+    fn test_dc_sweep_parallel_matches_serial_reference() {
+        // 12 steps (> PAR_MIN_STEPS=8) exercises the rayon path; compare
+        // against the original serial loop order computed inline.
+        let config = DcSweepConfig {
+            source_name: "I1".into(),
+            start: 0.0,
+            stop: 0.011,
+            steps: 12,
+        };
+        let results = run_dc_sweep(2, 0, &config, |mna, value| {
+            mna.stamp_resistor(1, 2, 1000.0);
+            mna.stamp_resistor(2, 0, 1000.0);
+            mna.stamp_current_source(0, 1, value);
+            Ok(())
+        })
+        .unwrap();
+
+        // Serial reference: rebuild + solve each point in order.
+        let mut ref_results = Vec::with_capacity(config.steps);
+        for i in 0..config.steps {
+            let value = config.start
+                + (config.stop - config.start) * i as Scalar / (config.steps - 1) as Scalar;
+            let mut mna = MnaMatrix::new(2, 0);
+            mna.stamp_resistor(1, 2, 1000.0);
+            mna.stamp_resistor(2, 0, 1000.0);
+            mna.stamp_current_source(0, 1, value);
+            let sol = mna.solve().unwrap();
+            ref_results.push(sol.node_voltages[..2].to_vec());
+        }
+
+        assert_eq!(results.len(), ref_results.len());
+        for (r, rref) in results.iter().zip(ref_results.iter()) {
+            for (a, b) in r.node_voltages.iter().zip(rref.iter()) {
+                assert!((a - b).abs() < 1e-10);
+            }
+        }
+    }
+
+    #[test]
+    fn test_ac_sweep_parallel_matches_serial_reference() {
+        let config = AcSweepConfig {
+            start_freq: 100.0,
+            stop_freq: 10000.0,
+            points: 12, // > PAR_MIN_POINTS → rayon path
+            scale: FreqScale::Linear,
+        };
+        let result = run_ac_sweep(2, 0, &config, |mna, _freq| {
+            mna.stamp_resistor(1, 2, 1000.0);
+            mna.stamp_resistor(2, 0, 1000.0);
+            mna.stamp_current_source(0, 1, 0.005);
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(result.node_voltages.len(), 12);
+        // Every frequency sees the same DC-like solution: V1=10V, V2=5V.
+        for v in &result.node_voltages {
+            assert!((v[0].re - 10.0).abs() < 1e-10);
+            assert!((v[1].re - 5.0).abs() < 1e-10);
+        }
+    }
+
+    #[test]
     fn test_dc_op_zero_power() {
         let result = run_dc_op(1, 0, |mna| {
             mna.stamp_resistor(1, 0, 1000.0);
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
         assert!((result.node_voltages[0]).abs() < 1e-10);
         assert!((result.total_power).abs() < 1e-10);
     }

@@ -127,29 +127,34 @@ impl Mhd2D {
 
         let mut U_new = self.U.clone();
 
-        // x-direction fluxes
-        for j in 0..ny {
+        // x-direction fluxes — each row writes disjoint U_new cells and only
+        // reads the immutable self.U, so rows run on rayon.
+        use rayon::prelude::*;
+        U_new.par_iter_mut().enumerate().for_each(|(j, row)| {
             for i in 1..nx - 1 {
                 let flux = self.hll_flux_x(&self.U[j][i - 1], &self.U[j][i + 1]);
                 for k in 0..8 {
-                    U_new[j][i][k] -=
+                    row[i][k] -=
                         dt / dx * (flux[k] - self.flux_x(&self.primitive(&self.U[j][i]))[k]);
                 }
             }
-        }
+        });
 
-        // y-direction fluxes
-        for j in 1..ny - 1 {
+        // y-direction fluxes — interior rows only.
+        U_new.par_iter_mut().enumerate().for_each(|(j, row)| {
+            if j == 0 || j == ny - 1 {
+                return;
+            }
             for i in 0..nx {
                 let flux = self.hll_flux_x(&self.U[j - 1][i], &self.U[j + 1][i]);
                 // Use hll_flux_x as proxy for y-flux (simplified)
                 // In production, replace with proper y-direction HLL
                 for k in 0..8 {
-                    U_new[j][i][k] -=
+                    row[i][k] -=
                         dt / dy * (flux[k] - self.flux_y(&self.primitive(&self.U[j][i]))[k]);
                 }
             }
-        }
+        });
 
         self.U = U_new;
         Ok(())
@@ -268,5 +273,61 @@ mod tests {
         let va = mhd.alfven_speed();
         // B²/ρ = 1, so v_A = 1
         assert!((va[0][0] - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_step_parallel_matches_serial_reference() {
+        // step() runs on rayon (per-row); verify against the original serial
+        // flux-sweep order on a non-trivial grid.
+        let (nx, ny) = (20usize, 20usize);
+        let (dx, dy, dt) = (0.05, 0.05, 0.0002);
+        let gamma = 5.0 / 3.0;
+        let mut mhd = Mhd2D::new(nx, ny, dx, dy, dt, gamma);
+        for j in 0..ny {
+            for i in 0..nx {
+                let rho = 1.0 + 0.1 * (i as Scalar).sin() * (j as Scalar).cos();
+                let e_int = rho / (gamma - 1.0);
+                mhd.U[j][i] = [rho, 0.05, -0.02, 0.0, 0.1, 0.0, 0.0, e_int];
+            }
+        }
+        let u0 = mhd.U.clone();
+        mhd.step().unwrap();
+
+        // Serial reference: read the pre-step snapshot u0 (immutable), write
+        // into a fresh buffer, exactly like the original U_new implementation.
+        let mut u_ref = u0.clone();
+        // x-direction
+        for j in 0..ny {
+            for i in 1..nx - 1 {
+                let flux = mhd.hll_flux_x(&u0[j][i - 1], &u0[j][i + 1]);
+                for k in 0..8 {
+                    u_ref[j][i][k] -=
+                        dt / dx * (flux[k] - mhd.flux_x(&mhd.primitive(&u0[j][i]))[k]);
+                }
+            }
+        }
+        // y-direction
+        for j in 1..ny - 1 {
+            for i in 0..nx {
+                let flux = mhd.hll_flux_x(&u0[j - 1][i], &u0[j + 1][i]);
+                for k in 0..8 {
+                    u_ref[j][i][k] -=
+                        dt / dy * (flux[k] - mhd.flux_y(&mhd.primitive(&u0[j][i]))[k]);
+                }
+            }
+        }
+
+        for j in 0..ny {
+            for i in 0..nx {
+                for k in 0..8 {
+                    assert!(
+                        (mhd.U[j][i][k] - u_ref[j][i][k]).abs() < 1e-12,
+                        "mismatch [{j}][{i}][{k}]: {} vs {}",
+                        mhd.U[j][i][k],
+                        u_ref[j][i][k]
+                    );
+                }
+            }
+        }
     }
 }

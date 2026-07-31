@@ -9,6 +9,9 @@
 
 use crate::core::types::Scalar;
 
+/// Number of independent ADI lines above which the sweeps run on rayon.
+const ADI_PAR_MIN_LINES: usize = 64;
+
 /// 3D boundary condition types for heat conduction.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum BoundaryCondition3D {
@@ -81,131 +84,134 @@ impl HeatConduction3D {
     }
 
     /// x-direction implicit sweep: solve tridiagonal system along each x-line.
+    ///
+    /// Each line (k,j) is independent: it is gathered from the current field,
+    /// solved (in parallel over lines), then scattered back. This is a true
+    /// Jacobi-style read-then-write per line, so lines never interact.
     fn x_sweep(&mut self, dt: Scalar, boundary: &[BoundaryCondition3D; 6]) -> Result<(), String> {
         let (nx, ny, nz) = (self.nx, self.ny, self.nz);
-        let dx = self.dx;
-        let rx = self.alpha * dt / (dx * dx);
+        let (dx, alpha) = (self.dx, self.alpha);
+        let rx = alpha * dt / (dx * dx);
 
-        for k in 0..nz {
-            for j in 0..ny {
-                let mut a = vec![0.0; nx];
-                let mut b = vec![0.0; nx];
-                let mut c = vec![0.0; nx];
-                let mut d = vec![0.0; nx];
-
-                for i in 0..nx {
-                    a[i] = -rx;
-                    b[i] = 1.0 + 2.0 * rx;
-                    c[i] = -rx;
-                    d[i] = self.temperature[k][j][i];
-                }
-
-                // Apply x-boundary conditions
-                match boundary[0] {
-                    // x-min
-                    BoundaryCondition3D::FixedTemp(t) => {
-                        b[0] = 1.0;
-                        c[0] = 0.0;
-                        d[0] = t;
-                    }
-                    BoundaryCondition3D::FixedHeatFlux(q) => {
-                        d[0] += q * dx / self.alpha;
-                    }
-                    BoundaryCondition3D::Adiabatic => {
-                        a[0] = 0.0;
-                        b[0] = 1.0;
-                        c[0] = -1.0;
-                        d[0] = 0.0;
-                    }
-                    _ => {}
-                }
-                match boundary[1] {
-                    // x-max
-                    BoundaryCondition3D::FixedTemp(t) => {
-                        a[nx - 1] = 0.0;
-                        b[nx - 1] = 1.0;
-                        d[nx - 1] = t;
-                    }
-                    BoundaryCondition3D::FixedHeatFlux(q) => {
-                        d[nx - 1] -= q * dx / self.alpha;
-                    }
-                    BoundaryCondition3D::Adiabatic => {
-                        a[nx - 1] = -1.0;
-                        b[nx - 1] = 1.0;
-                        c[nx - 1] = 0.0;
-                        d[nx - 1] = 0.0;
-                    }
-                    _ => {}
-                }
-
-                let x = solve_tridiagonal(&a, &b, &c, &d)?;
-                self.temperature[k][j][..nx].copy_from_slice(&x);
+        let lines: Vec<(usize, usize)> =
+            (0..nz).flat_map(|k| (0..ny).map(move |j| (k, j))).collect();
+        let solve_line = |k: usize, j: usize| -> Result<Vec<Scalar>, String> {
+            let mut a = vec![0.0; nx];
+            let mut b = vec![0.0; nx];
+            let mut c = vec![0.0; nx];
+            let mut d = vec![0.0; nx];
+            for i in 0..nx {
+                a[i] = -rx;
+                b[i] = 1.0 + 2.0 * rx;
+                c[i] = -rx;
+                d[i] = self.temperature[k][j][i];
             }
+            match boundary[0] {
+                BoundaryCondition3D::FixedTemp(t) => {
+                    b[0] = 1.0;
+                    c[0] = 0.0;
+                    d[0] = t;
+                }
+                BoundaryCondition3D::FixedHeatFlux(q) => d[0] += q * dx / alpha,
+                BoundaryCondition3D::Adiabatic => {
+                    a[0] = 0.0;
+                    b[0] = 1.0;
+                    c[0] = -1.0;
+                    d[0] = 0.0;
+                }
+                _ => {}
+            }
+            match boundary[1] {
+                BoundaryCondition3D::FixedTemp(t) => {
+                    a[nx - 1] = 0.0;
+                    b[nx - 1] = 1.0;
+                    d[nx - 1] = t;
+                }
+                BoundaryCondition3D::FixedHeatFlux(q) => d[nx - 1] -= q * dx / alpha,
+                BoundaryCondition3D::Adiabatic => {
+                    a[nx - 1] = -1.0;
+                    b[nx - 1] = 1.0;
+                    c[nx - 1] = 0.0;
+                    d[nx - 1] = 0.0;
+                }
+                _ => {}
+            }
+            solve_tridiagonal(&a, &b, &c, &d)
+        };
+        let solved: Result<Vec<Vec<Scalar>>, String> = if lines.len() >= ADI_PAR_MIN_LINES {
+            use rayon::prelude::*;
+            lines.par_iter().map(|&(k, j)| solve_line(k, j)).collect()
+        } else {
+            lines.iter().map(|&(k, j)| solve_line(k, j)).collect()
+        };
+        let solved = solved?;
+        for (&(k, j), x) in lines.iter().zip(solved.iter()) {
+            self.temperature[k][j][..nx].copy_from_slice(x);
         }
         Ok(())
     }
 
-    /// y-direction implicit sweep.
+    /// y-direction implicit sweep (lines indexed by (k, i), solved along j).
     fn y_sweep(&mut self, dt: Scalar, boundary: &[BoundaryCondition3D; 6]) -> Result<(), String> {
         let (nx, ny, nz) = (self.nx, self.ny, self.nz);
-        let dy = self.dy;
-        let ry = self.alpha * dt / (dy * dy);
+        let (dy, alpha) = (self.dy, self.alpha);
+        let ry = alpha * dt / (dy * dy);
 
-        for k in 0..nz {
-            for i in 0..nx {
-                let mut a = vec![0.0; ny];
-                let mut b = vec![0.0; ny];
-                let mut c = vec![0.0; ny];
-                let mut d = vec![0.0; ny];
-
-                for j in 0..ny {
-                    a[j] = -ry;
-                    b[j] = 1.0 + 2.0 * ry;
-                    c[j] = -ry;
-                    d[j] = self.temperature[k][j][i];
+        let lines: Vec<(usize, usize)> =
+            (0..nz).flat_map(|k| (0..nx).map(move |i| (k, i))).collect();
+        let solve_line = |k: usize, i: usize| -> Result<Vec<Scalar>, String> {
+            let mut a = vec![0.0; ny];
+            let mut b = vec![0.0; ny];
+            let mut c = vec![0.0; ny];
+            let mut d = vec![0.0; ny];
+            for j in 0..ny {
+                a[j] = -ry;
+                b[j] = 1.0 + 2.0 * ry;
+                c[j] = -ry;
+                d[j] = self.temperature[k][j][i];
+            }
+            match boundary[2] {
+                BoundaryCondition3D::FixedTemp(t) => {
+                    b[0] = 1.0;
+                    c[0] = 0.0;
+                    d[0] = t;
                 }
-
-                match boundary[2] {
-                    // y-min
-                    BoundaryCondition3D::FixedTemp(t) => {
-                        b[0] = 1.0;
-                        c[0] = 0.0;
-                        d[0] = t;
-                    }
-                    BoundaryCondition3D::FixedHeatFlux(q) => {
-                        d[0] += q * dy / self.alpha;
-                    }
-                    BoundaryCondition3D::Adiabatic => {
-                        a[0] = 0.0;
-                        b[0] = 1.0;
-                        c[0] = -1.0;
-                        d[0] = 0.0;
-                    }
-                    _ => {}
+                BoundaryCondition3D::FixedHeatFlux(q) => d[0] += q * dy / alpha,
+                BoundaryCondition3D::Adiabatic => {
+                    a[0] = 0.0;
+                    b[0] = 1.0;
+                    c[0] = -1.0;
+                    d[0] = 0.0;
                 }
-                match boundary[3] {
-                    // y-max
-                    BoundaryCondition3D::FixedTemp(t) => {
-                        a[ny - 1] = 0.0;
-                        b[ny - 1] = 1.0;
-                        d[ny - 1] = t;
-                    }
-                    BoundaryCondition3D::FixedHeatFlux(q) => {
-                        d[ny - 1] -= q * dy / self.alpha;
-                    }
-                    BoundaryCondition3D::Adiabatic => {
-                        a[ny - 1] = -1.0;
-                        b[ny - 1] = 1.0;
-                        c[ny - 1] = 0.0;
-                        d[ny - 1] = 0.0;
-                    }
-                    _ => {}
+                _ => {}
+            }
+            match boundary[3] {
+                BoundaryCondition3D::FixedTemp(t) => {
+                    a[ny - 1] = 0.0;
+                    b[ny - 1] = 1.0;
+                    d[ny - 1] = t;
                 }
-
-                let x = solve_tridiagonal(&a, &b, &c, &d)?;
-                for (j, &val) in x.iter().enumerate() {
-                    self.temperature[k][j][i] = val;
+                BoundaryCondition3D::FixedHeatFlux(q) => d[ny - 1] -= q * dy / alpha,
+                BoundaryCondition3D::Adiabatic => {
+                    a[ny - 1] = -1.0;
+                    b[ny - 1] = 1.0;
+                    c[ny - 1] = 0.0;
+                    d[ny - 1] = 0.0;
                 }
+                _ => {}
+            }
+            solve_tridiagonal(&a, &b, &c, &d)
+        };
+        let solved: Result<Vec<Vec<Scalar>>, String> = if lines.len() >= ADI_PAR_MIN_LINES {
+            use rayon::prelude::*;
+            lines.par_iter().map(|&(k, i)| solve_line(k, i)).collect()
+        } else {
+            lines.iter().map(|&(k, i)| solve_line(k, i)).collect()
+        };
+        let solved = solved?;
+        for (&(k, i), x) in lines.iter().zip(solved.iter()) {
+            for (j, &val) in x.iter().enumerate() {
+                self.temperature[k][j][i] = val;
             }
         }
         Ok(())
@@ -214,64 +220,64 @@ impl HeatConduction3D {
     /// z-direction implicit sweep.
     fn z_sweep(&mut self, dt: Scalar, boundary: &[BoundaryCondition3D; 6]) -> Result<(), String> {
         let (nx, ny, nz) = (self.nx, self.ny, self.nz);
-        let dz = self.dz;
-        let rz = self.alpha * dt / (dz * dz);
+        let (dz, alpha) = (self.dz, self.alpha);
+        let rz = alpha * dt / (dz * dz);
 
-        for j in 0..ny {
-            for i in 0..nx {
-                let mut a = vec![0.0; nz];
-                let mut b = vec![0.0; nz];
-                let mut c = vec![0.0; nz];
-                let mut d = vec![0.0; nz];
-
-                for k in 0..nz {
-                    a[k] = -rz;
-                    b[k] = 1.0 + 2.0 * rz;
-                    c[k] = -rz;
-                    d[k] = self.temperature[k][j][i];
+        let lines: Vec<(usize, usize)> =
+            (0..ny).flat_map(|j| (0..nx).map(move |i| (j, i))).collect();
+        let solve_line = |j: usize, i: usize| -> Result<Vec<Scalar>, String> {
+            let mut a = vec![0.0; nz];
+            let mut b = vec![0.0; nz];
+            let mut c = vec![0.0; nz];
+            let mut d = vec![0.0; nz];
+            for k in 0..nz {
+                a[k] = -rz;
+                b[k] = 1.0 + 2.0 * rz;
+                c[k] = -rz;
+                d[k] = self.temperature[k][j][i];
+            }
+            match boundary[4] {
+                BoundaryCondition3D::FixedTemp(t) => {
+                    b[0] = 1.0;
+                    c[0] = 0.0;
+                    d[0] = t;
                 }
-
-                match boundary[4] {
-                    // z-min
-                    BoundaryCondition3D::FixedTemp(t) => {
-                        b[0] = 1.0;
-                        c[0] = 0.0;
-                        d[0] = t;
-                    }
-                    BoundaryCondition3D::FixedHeatFlux(q) => {
-                        d[0] += q * dz / self.alpha;
-                    }
-                    BoundaryCondition3D::Adiabatic => {
-                        a[0] = 0.0;
-                        b[0] = 1.0;
-                        c[0] = -1.0;
-                        d[0] = 0.0;
-                    }
-                    _ => {}
+                BoundaryCondition3D::FixedHeatFlux(q) => d[0] += q * dz / alpha,
+                BoundaryCondition3D::Adiabatic => {
+                    a[0] = 0.0;
+                    b[0] = 1.0;
+                    c[0] = -1.0;
+                    d[0] = 0.0;
                 }
-                match boundary[5] {
-                    // z-max
-                    BoundaryCondition3D::FixedTemp(t) => {
-                        a[nz - 1] = 0.0;
-                        b[nz - 1] = 1.0;
-                        d[nz - 1] = t;
-                    }
-                    BoundaryCondition3D::FixedHeatFlux(q) => {
-                        d[nz - 1] -= q * dz / self.alpha;
-                    }
-                    BoundaryCondition3D::Adiabatic => {
-                        a[nz - 1] = -1.0;
-                        b[nz - 1] = 1.0;
-                        c[nz - 1] = 0.0;
-                        d[nz - 1] = 0.0;
-                    }
-                    _ => {}
+                _ => {}
+            }
+            match boundary[5] {
+                BoundaryCondition3D::FixedTemp(t) => {
+                    a[nz - 1] = 0.0;
+                    b[nz - 1] = 1.0;
+                    d[nz - 1] = t;
                 }
-
-                let x = solve_tridiagonal(&a, &b, &c, &d)?;
-                for (k, &val) in x.iter().enumerate() {
-                    self.temperature[k][j][i] = val;
+                BoundaryCondition3D::FixedHeatFlux(q) => d[nz - 1] -= q * dz / alpha,
+                BoundaryCondition3D::Adiabatic => {
+                    a[nz - 1] = -1.0;
+                    b[nz - 1] = 1.0;
+                    c[nz - 1] = 0.0;
+                    d[nz - 1] = 0.0;
                 }
+                _ => {}
+            }
+            solve_tridiagonal(&a, &b, &c, &d)
+        };
+        let solved: Result<Vec<Vec<Scalar>>, String> = if lines.len() >= ADI_PAR_MIN_LINES {
+            use rayon::prelude::*;
+            lines.par_iter().map(|&(j, i)| solve_line(j, i)).collect()
+        } else {
+            lines.iter().map(|&(j, i)| solve_line(j, i)).collect()
+        };
+        let solved = solved?;
+        for (&(j, i), x) in lines.iter().zip(solved.iter()) {
+            for (k, &val) in x.iter().enumerate() {
+                self.temperature[k][j][i] = val;
             }
         }
         Ok(())
@@ -485,6 +491,33 @@ mod tests {
             .iter()
             .any(|p| p.iter().any(|r| r.iter().any(|&t| (t - 20.0).abs() > 0.01)));
         assert!(has_change);
+    }
+
+    #[test]
+    fn test_adi_parallel_steady_state() {
+        // 10×10×10 → 100 lines per sweep ≥ ADI_PAR_MIN_LINES, so every sweep
+        // runs the rayon path. 500 steps ≫ diffusion time scale ⇒ steady state.
+        let mut hc = HeatConduction3D::new(1e-4, 10, 10, 10, 0.01, 0.01, 0.01, 20.0);
+        assert!(hc.nz * hc.ny >= ADI_PAR_MIN_LINES);
+        let bc = [
+            BoundaryCondition3D::FixedTemp(100.0),
+            BoundaryCondition3D::FixedTemp(0.0),
+            BoundaryCondition3D::Adiabatic,
+            BoundaryCondition3D::Adiabatic,
+            BoundaryCondition3D::Adiabatic,
+            BoundaryCondition3D::Adiabatic,
+        ];
+        for _ in 0..500 {
+            hc.adi_step(0.1, &bc).unwrap();
+        }
+        // Steady state is the linear profile 100·(1 - i/(nx-1)); mid-plane ≈ 44.4.
+        let expect = 100.0 * (1.0 - 5.0 / 9.0);
+        let mid = hc.temperature[5][5][5];
+        assert!(
+            (mid - expect).abs() < 15.0,
+            "parallel ADI steady state off: {mid}"
+        );
+        assert!(mid.is_finite());
     }
 
     #[test]

@@ -93,7 +93,10 @@ impl TissueDiffusion2D {
 
         let mut new_conc = vec![vec![0.0; nx]; ny];
 
-        for j in 0..ny {
+        // Each cell's update reads only the immutable concentration snapshot
+        // and writes a disjoint new_conc cell → rows run on rayon.
+        use rayon::prelude::*;
+        new_conc.par_iter_mut().enumerate().for_each(|(j, row)| {
             for i in 0..nx {
                 // Laplacian (central differences)
                 let mut laplacian = 0.0;
@@ -113,16 +116,19 @@ impl TissueDiffusion2D {
 
                 // Diffusion + clearance + source
                 let d_conc = d * laplacian - k * self.concentration[j][i] + self.source[j][i];
-                new_conc[j][i] = self.concentration[j][i] + dt * d_conc;
+                row[i] = self.concentration[j][i] + dt * d_conc;
             }
-        }
+        });
 
         // Enforce non-negativity
-        for j in 0..ny {
-            for i in 0..nx {
-                self.concentration[j][i] = new_conc[j][i].max(0.0);
-            }
-        }
+        self.concentration
+            .par_iter_mut()
+            .zip(new_conc.par_iter())
+            .for_each(|(c_row, n_row)| {
+                for i in 0..nx {
+                    c_row[i] = n_row[i].max(0.0);
+                }
+            });
 
         Ok(())
     }
@@ -246,6 +252,65 @@ mod tests {
         for row in &td.concentration {
             for &val in row {
                 assert!(val >= 0.0, "concentration must never be negative");
+            }
+        }
+    }
+
+    #[test]
+    fn test_step_parallel_matches_serial_reference() {
+        // step() runs on rayon (per-row); verify against the original serial
+        // loop order on a non-trivial grid.
+        let (nx, ny) = (48usize, 48usize);
+        let d = 1e-9;
+        let k = 1e-4;
+        let h = 0.001;
+        let dt = 0.01;
+
+        let mut td = TissueDiffusion2D::new(nx, ny, h, h, d, k);
+        td.inject(20, 20, 5.0);
+        td.add_source(30, 30, 2.0);
+        td.step(dt).unwrap();
+
+        // Serial reference (original loop order).
+        let dx2 = h * h;
+        let dy2 = h * h;
+        let mut ref_conc = vec![vec![0.0; nx]; ny];
+        let mut ref_source = vec![vec![0.0; nx]; ny];
+        ref_conc[20][20] = 5.0;
+        ref_source[30][30] = 2.0;
+        let mut new_conc = vec![vec![0.0; nx]; ny];
+        for j in 0..ny {
+            for i in 0..nx {
+                let mut laplacian = 0.0;
+                if i > 0 {
+                    laplacian += (ref_conc[j][i - 1] - ref_conc[j][i]) / dx2;
+                }
+                if i + 1 < nx {
+                    laplacian += (ref_conc[j][i + 1] - ref_conc[j][i]) / dx2;
+                }
+                if j > 0 {
+                    laplacian += (ref_conc[j - 1][i] - ref_conc[j][i]) / dy2;
+                }
+                if j + 1 < ny {
+                    laplacian += (ref_conc[j + 1][i] - ref_conc[j][i]) / dy2;
+                }
+                let d_conc = d * laplacian - k * ref_conc[j][i] + ref_source[j][i];
+                new_conc[j][i] = ref_conc[j][i] + dt * d_conc;
+            }
+        }
+        let ref_after: Vec<Vec<Scalar>> = new_conc
+            .iter()
+            .map(|r| r.iter().map(|&v| v.max(0.0)).collect())
+            .collect();
+
+        for j in 0..ny {
+            for i in 0..nx {
+                assert!(
+                    (td.concentration[j][i] - ref_after[j][i]).abs() < 1e-12,
+                    "mismatch at [{j}][{i}]: {} vs {}",
+                    td.concentration[j][i],
+                    ref_after[j][i]
+                );
             }
         }
     }

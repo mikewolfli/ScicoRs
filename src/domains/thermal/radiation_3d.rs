@@ -163,15 +163,19 @@ impl DomRadiation3D {
             0.0
         }; // Albedo
 
-        // Reset incident radiation and source
-        for k in 0..self.nz {
-            for j in 0..self.ny {
-                for i in 0..self.nx {
-                    self.incident_radiation[k][j][i] = 0.0;
-                    self.radiative_source[k][j][i] = 0.0;
+        // Reset incident radiation and source (per-cell independent → rayon).
+        use rayon::prelude::*;
+        self.incident_radiation
+            .par_iter_mut()
+            .zip(self.radiative_source.par_iter_mut())
+            .for_each(|(inc_plane, src_plane)| {
+                for j in 0..self.ny {
+                    for i in 0..self.nx {
+                        inc_plane[j][i] = 0.0;
+                        src_plane[j][i] = 0.0;
+                    }
                 }
-            }
-        }
+            });
 
         let n_dir = self.quad.n_dir;
 
@@ -270,17 +274,22 @@ impl DomRadiation3D {
             }
         }
 
-        // Compute radiative heat source: ∇·q_r = κ_a(4πI_b - G)
-        for k in 0..self.nz {
-            for j in 0..self.ny {
-                for i in 0..self.nx {
-                    let i_b = SIGMA_SB * self.temperature[k][j][i].powi(4) / std::f64::consts::PI;
-                    self.radiative_source[k][j][i] = self.absorption
-                        * (4.0 * std::f64::consts::PI * i_b - self.incident_radiation[k][j][i]);
-                    let _ = i_b;
+        // Compute radiative heat source: ∇·q_r = κ_a(4πI_b - G).
+        // Per-cell independent (reads temperature/incident, writes source) → rayon.
+        let temperature = &self.temperature;
+        let incident = &self.incident_radiation;
+        self.radiative_source
+            .par_iter_mut()
+            .enumerate()
+            .for_each(|(k, src_plane)| {
+                for j in 0..self.ny {
+                    for i in 0..self.nx {
+                        let i_b = SIGMA_SB * temperature[k][j][i].powi(4) / std::f64::consts::PI;
+                        src_plane[j][i] = self.absorption
+                            * (4.0 * std::f64::consts::PI * i_b - incident[k][j][i]);
+                    }
                 }
-            }
-        }
+            });
 
         Ok(())
     }
@@ -442,5 +451,37 @@ mod tests {
     fn test_dom_zero_extinction_error() {
         let mut dom = DomRadiation3D::new(4, 4, 4, 0.1, 0.1, 0.1, 0.0, 0.0, 2, 300.0);
         assert!(dom.solve().is_err());
+    }
+
+    #[test]
+    fn test_dom_source_parallel_matches_serial_reference() {
+        // The radiative-source pass runs on rayon; verify each cell equals the
+        // serial formula ∇·q_r = κ_a(4πI_b − G) recomputed inline.
+        let mut dom = DomRadiation3D::new(6, 6, 6, 0.1, 0.1, 0.1, 0.5, 0.1, 2, 300.0);
+        for k in 0..dom.nz {
+            for j in 0..dom.ny {
+                for i in 0..dom.nx {
+                    dom.temperature[k][j][i] =
+                        300.0 + (i as Scalar) * 10.0 + (j as Scalar) * 5.0 + (k as Scalar) * 3.0;
+                }
+            }
+        }
+        dom.solve().unwrap();
+
+        for k in 0..dom.nz {
+            for j in 0..dom.ny {
+                for i in 0..dom.nx {
+                    let i_b = SIGMA_SB * dom.temperature[k][j][i].powi(4) / std::f64::consts::PI;
+                    let expected = dom.absorption
+                        * (4.0 * std::f64::consts::PI * i_b - dom.incident_radiation[k][j][i]);
+                    assert!(
+                        (dom.radiative_source[k][j][i] - expected).abs() < 1e-12,
+                        "source mismatch [{k}][{j}][{i}]: {} vs {}",
+                        dom.radiative_source[k][j][i],
+                        expected
+                    );
+                }
+            }
+        }
     }
 }

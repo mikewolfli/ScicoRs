@@ -61,22 +61,21 @@ impl SchrodingerSolver {
     /// Propagator step: |ψ(t+dt)⟩ = exp(-i·H·dt)·|ψ(t)⟩ (first-order approximation).
     pub fn propagator_step(&self, state: &QuantumState) -> Result<QuantumState, String> {
         let dim = state.amplitudes.len();
-        let mut result = vec![ComplexScalar::new(0.0, 0.0); dim];
-
+        // Build the propagator I − i·H·dt, then apply it as a complex mat-vec
+        // (routes to the SIMD kernel for large dim).
+        let mut prop = vec![vec![ComplexScalar::new(0.0, 0.0); dim]; dim];
         for i in 0..dim {
-            let mut s = ComplexScalar::new(0.0, 0.0);
             for j in 0..dim {
                 let h_ij = self.hamiltonian[i][j];
-                // First-order: exp(-i*H*dt) ≈ I - i*H*dt
-                let prop = if i == j {
+                prop[i][j] = if i == j {
                     ComplexScalar::new(1.0, 0.0) - h_ij * ComplexScalar::new(0.0, self.dt)
                 } else {
                     -h_ij * ComplexScalar::new(0.0, self.dt)
                 };
-                s += prop * state.amplitudes[j];
             }
-            result[i] = s;
         }
+        let result = crate::core::compute::matrix::mat_vec_mul_complex(&prop, &state.amplitudes)
+            .map_err(|e| e.message)?;
 
         Ok(QuantumState {
             amplitudes: result,

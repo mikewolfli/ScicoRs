@@ -10,6 +10,9 @@ use num_complex::Complex;
 /// Alias for complex scalar type used in antenna computations.
 type ComplexScalar = Complex<Scalar>;
 
+/// Sampling directions above which the radiation-pattern loop runs on rayon.
+const RAD_PATTERN_PAR_MIN: usize = 256;
+
 /// 3D antenna geometry and excitation for post-processing FDTD results.
 #[derive(Debug, Clone)]
 pub struct Antenna3D {
@@ -46,71 +49,73 @@ impl Antenna3D {
     /// Uses the equivalence principle: near E/H fields on a Huygens surface
     /// are transformed to far-field via Stratton-Chu integrals (simplified).
     pub fn radiation_pattern(&self, fdtd: &Fdtd3D) -> Vec<[Scalar; 3]> {
-        let mut pattern = Vec::with_capacity(self.n_theta * self.n_phi);
-
-        // Extract near-field data from the FDTD grid boundaries
-        let (nx, ny, nz) = (fdtd.nx, fdtd.ny, fdtd.nz);
-
         // Total radiated power (Poynting vector integration)
         let total_power = self.total_radiated_power(fdtd);
+        let n_dir = self.n_theta.saturating_mul(self.n_phi);
+        // Each (theta, phi) direction is independent → parallel over directions.
+        let compute = |idx: usize| -> [Scalar; 3] {
+            let ti = idx / self.n_phi.max(1);
+            let pi = idx % self.n_phi.max(1);
+            let theta = std::f64::consts::PI * ti as Scalar / (self.n_theta.max(2) - 1) as Scalar;
+            let phi = 2.0 * std::f64::consts::PI * pi as Scalar / (self.n_phi.max(2) - 1) as Scalar;
+            // Unit vector in far-field direction
+            let ux = theta.sin() * phi.cos();
+            let uy = theta.sin() * phi.sin();
+            let uz = theta.cos();
 
-        for ti in 0..self.n_theta {
-            let theta = std::f64::consts::PI * ti as Scalar / (self.n_theta - 1) as Scalar;
-            for pi in 0..self.n_phi {
-                let phi = 2.0 * std::f64::consts::PI * pi as Scalar / (self.n_phi - 1) as Scalar;
-                // Unit vector in far-field direction
-                let ux = theta.sin() * phi.cos();
-                let uy = theta.sin() * phi.sin();
-                let uz = theta.cos();
+            // Simplified far-field: integrate equivalent currents on a
+            // box surface bounding the antenna
+            let (nx, ny, nz) = (fdtd.nx, fdtd.ny, fdtd.nz);
+            let mut e_far = [0.0; 3];
 
-                // Simplified far-field: integrate equivalent currents on a
-                // box surface bounding the antenna
-                let mut e_far = [0.0; 3];
-
-                // Contribution from top face (z = nz-1)
-                for j in 0..ny {
-                    for i in 0..nx {
-                        let ex_val = fdtd
-                            .ex
-                            .get(nz)
-                            .and_then(|p| p.get(j))
-                            .and_then(|r| r.get(i))
-                            .copied()
-                            .unwrap_or(0.0);
-                        let ey_val = fdtd
-                            .ey
-                            .get(nz)
-                            .and_then(|p| p.get(j))
-                            .and_then(|r| r.get(i + 1))
-                            .copied()
-                            .unwrap_or(0.0);
-                        let phase = (ux * i as Scalar * fdtd.dx
-                            + uy * j as Scalar * fdtd.dy
-                            + uz * (nz - 1) as Scalar * fdtd.dz)
-                            * 2.0
-                            * std::f64::consts::PI
-                            * self.frequency
-                            / C;
-                        let (c, s) = phase.sin_cos();
-                        let ejkr = ComplexScalar::new(c, s);
-                        e_far[0] += (ex_val * ejkr.re - ey_val * ejkr.im) * fdtd.dx * fdtd.dy;
-                        e_far[1] += (ey_val * ejkr.re + ex_val * ejkr.im) * fdtd.dx * fdtd.dy;
-                    }
+            // Contribution from top face (z = nz-1)
+            for j in 0..ny {
+                for i in 0..nx {
+                    let ex_val = fdtd
+                        .ex
+                        .get(nz)
+                        .and_then(|p| p.get(j))
+                        .and_then(|r| r.get(i))
+                        .copied()
+                        .unwrap_or(0.0);
+                    let ey_val = fdtd
+                        .ey
+                        .get(nz)
+                        .and_then(|p| p.get(j))
+                        .and_then(|r| r.get(i + 1))
+                        .copied()
+                        .unwrap_or(0.0);
+                    let phase = (ux * i as Scalar * fdtd.dx
+                        + uy * j as Scalar * fdtd.dy
+                        + uz * (nz - 1) as Scalar * fdtd.dz)
+                        * 2.0
+                        * std::f64::consts::PI
+                        * self.frequency
+                        / C;
+                    let (c, s) = phase.sin_cos();
+                    let ejkr = ComplexScalar::new(c, s);
+                    e_far[0] += (ex_val * ejkr.re - ey_val * ejkr.im) * fdtd.dx * fdtd.dy;
+                    e_far[1] += (ey_val * ejkr.re + ex_val * ejkr.im) * fdtd.dx * fdtd.dy;
                 }
-
-                let gain = if total_power > 0.0 {
-                    let u = e_far[0] * e_far[0] + e_far[1] * e_far[1];
-                    10.0 * (4.0 * std::f64::consts::PI * u / total_power)
-                        .log10()
-                        .max(-50.0)
-                } else {
-                    -50.0
-                };
-
-                pattern.push([theta, phi, gain]);
             }
+
+            let gain = if total_power > 0.0 {
+                let u = e_far[0] * e_far[0] + e_far[1] * e_far[1];
+                10.0 * (4.0 * std::f64::consts::PI * u / total_power)
+                    .log10()
+                    .max(-50.0)
+            } else {
+                -50.0
+            };
+
+            [theta, phi, gain]
+        };
+        if n_dir >= RAD_PATTERN_PAR_MIN {
+            use rayon::prelude::*;
+            (0..n_dir).into_par_iter().map(compute).collect()
+        } else {
+            (0..n_dir).map(compute).collect()
         }
-        pattern
     }
 
     /// Compute directivity (max gain in dBi).

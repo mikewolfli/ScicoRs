@@ -597,19 +597,24 @@ impl ConstraintSolver {
         alpha: Scalar,
         beta: Scalar,
     ) -> Vec<Scalar> {
+        // O(1) body lookup per constraint instead of an O(bodies) linear scan.
+        let body_indices: std::collections::HashMap<&str, usize> = bodies
+            .iter()
+            .enumerate()
+            .map(|(i, b)| (b.id.as_str(), i))
+            .collect();
         let mut corrections = Vec::new();
         for c in &self.constraints {
-            let ba = bodies.iter().find(|b| b.id == c.body_a);
-            let bb = bodies.iter().find(|b| b.id == c.body_b);
-            match (ba, bb) {
-                (Some(ba), Some(bb)) => {
-                    let pos_err = c.position_error(ba, bb);
-                    let vel_err = c.velocity_error(ba, bb);
-                    for i in 0..pos_err.len().min(vel_err.len()) {
-                        corrections.push(alpha * vel_err[i] + beta * pos_err[i]);
-                    }
+            let ia = body_indices.get(c.body_a.as_str()).copied();
+            let ib = body_indices.get(c.body_b.as_str()).copied();
+            if let (Some(ia), Some(ib)) = (ia, ib) {
+                let ba = &bodies[ia];
+                let bb = &bodies[ib];
+                let pos_err = c.position_error(ba, bb);
+                let vel_err = c.velocity_error(ba, bb);
+                for i in 0..pos_err.len().min(vel_err.len()) {
+                    corrections.push(alpha * vel_err[i] + beta * pos_err[i]);
                 }
-                _ => {}
             }
         }
         corrections
@@ -642,10 +647,10 @@ impl ConstraintSolver {
         // Assemble J * M⁻¹ * Jᵀ (simplified: treats each body independently)
         let mut n_lambda = 0;
         for c in &self.constraints {
-            let ba = bodies.iter().find(|b| b.id == c.body_a);
-            let bb = bodies.iter().find(|b| b.id == c.body_b);
-            if ba.is_some() && bb.is_some() {
-                let jac = c.jacobian(ba.unwrap(), bb.unwrap());
+            let ia = body_indices.get(c.body_a.as_str()).copied();
+            let ib = body_indices.get(c.body_b.as_str()).copied();
+            if let (Some(ia), Some(ib)) = (ia, ib) {
+                let jac = c.jacobian(&bodies[ia], &bodies[ib]);
                 n_lambda += jac.j_rows.len();
             }
         }
@@ -658,9 +663,11 @@ impl ConstraintSolver {
         let mut row_idx = 0;
 
         for c in &self.constraints {
-            let ba_opt = bodies.iter().find(|b| b.id == c.body_a);
-            let bb_opt = bodies.iter().find(|b| b.id == c.body_b);
-            if let (Some(ba), Some(bb)) = (ba_opt, bb_opt) {
+            let ia = body_indices.get(c.body_a.as_str()).copied();
+            let ib = body_indices.get(c.body_b.as_str()).copied();
+            if let (Some(ia), Some(ib)) = (ia, ib) {
+                let ba = &bodies[ia];
+                let bb = &bodies[ib];
                 let jac = c.jacobian(ba, bb);
                 let nrows = jac.j_rows.len();
 
@@ -707,18 +714,10 @@ impl ConstraintSolver {
 
         row_idx = 0;
         for c in &self.constraints {
-            let ba_opt = bodies.iter().find(|b| b.id == c.body_a);
-            let bb_opt = bodies.iter().find(|b| b.id == c.body_b);
-            if let (Some(ba), Some(bb)) = (ba_opt, bb_opt) {
-                let ia = body_indices
-                    .get(c.body_a.as_str())
-                    .copied()
-                    .unwrap_or(usize::MAX);
-                let ib = body_indices
-                    .get(c.body_b.as_str())
-                    .copied()
-                    .unwrap_or(usize::MAX);
-                let jac = c.jacobian(ba, bb);
+            let ia = body_indices.get(c.body_a.as_str()).copied();
+            let ib = body_indices.get(c.body_b.as_str()).copied();
+            if let (Some(ia), Some(ib)) = (ia, ib) {
+                let jac = c.jacobian(&bodies[ia], &bodies[ib]);
 
                 for i in 0..jac.j_rows.len() {
                     let lambda = if row_idx < lambdas.len() {

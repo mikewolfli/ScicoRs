@@ -89,29 +89,31 @@ impl ExplicitDynamics {
         let dt2 = self.dt * self.dt;
         let mut u_next = vec![0.0; n];
 
-        for i in 0..n {
+        // Each DOF is independent (diagonal mass/damping) → rayon.
+        use rayon::prelude::*;
+        u_next.par_iter_mut().enumerate().for_each(|(i, un)| {
             if self.mass[i] <= 0.0 {
-                continue; // Fixed DOF
+                return; // Fixed DOF
             }
             // Effective force: f_ext - f_int - C·v
             let f_eff = f_ext[i] - f_int[i] - self.damping[i] * self.v[i];
             // u_{n+1} = f_eff / m * dt² + 2*u_n - u_{n-1}
-            u_next[i] = f_eff / self.mass[i] * dt2 + 2.0 * self.u[i] - self.u_prev[i];
-        }
+            *un = f_eff / self.mass[i] * dt2 + 2.0 * self.u[i] - self.u_prev[i];
+        });
 
         // Update velocity using central difference: v_n = (u_{n+1} - u_{n-1}) / (2·dt)
-        for i in 0..n {
+        self.v.par_iter_mut().enumerate().for_each(|(i, vi)| {
             if self.mass[i] > 0.0 {
-                self.v[i] = (u_next[i] - self.u_prev[i]) / (2.0 * self.dt);
+                *vi = (u_next[i] - self.u_prev[i]) / (2.0 * self.dt);
             }
-        }
+        });
 
         // Update acceleration: a_n = (u_{n+1} - 2·u_n + u_{n-1}) / dt²
-        for i in 0..n {
+        self.a.par_iter_mut().enumerate().for_each(|(i, ai)| {
             if self.mass[i] > 0.0 {
-                self.a[i] = (u_next[i] - 2.0 * self.u[i] + self.u_prev[i]) / dt2;
+                *ai = (u_next[i] - 2.0 * self.u[i] + self.u_prev[i]) / dt2;
             }
-        }
+        });
 
         // Shift states
         self.u_prev.copy_from_slice(&self.u);
@@ -253,5 +255,44 @@ mod tests {
         }
         // After 500 steps with damping, amplitude should have decayed
         assert!(sys.u[0].abs() < 0.8, "damped amplitude should decay");
+    }
+
+    #[test]
+    fn test_step_parallel_matches_serial_reference() {
+        // step() runs on rayon (per-DOF); verify against the original serial
+        // loop order on a many-DOF system.
+        let n = 256;
+        let dt = 0.001;
+        let mut sys = ExplicitDynamics::new(n, dt);
+        for i in 0..n {
+            sys.set_mass(i, (i % 3) as Scalar + 1.0);
+        }
+        let u0: Vec<Scalar> = (0..n).map(|i| (i as Scalar).sin() * 0.1).collect();
+        let v0: Vec<Scalar> = (0..n).map(|i| (i as Scalar).cos() * 0.05).collect();
+        sys.set_initial_conditions(&u0, &v0);
+        let f_ext: Vec<Scalar> = (0..n).map(|i| (i as Scalar) * 0.01).collect();
+        let f_int: Vec<Scalar> = (0..n).map(|i| (i as Scalar) * 0.005).collect();
+        sys.step(&f_ext, &f_int).unwrap();
+
+        // Serial reference.
+        let dt2 = dt * dt;
+        let mut u_next = vec![0.0; n];
+        for i in 0..n {
+            if sys.mass[i] <= 0.0 {
+                continue;
+            }
+            let f_eff = f_ext[i] - f_int[i] - sys.damping[i] * v0[i];
+            u_next[i] = f_eff / sys.mass[i] * dt2 + 2.0 * u0[i] - u0[i];
+        }
+        for i in 0..n {
+            if sys.mass[i] <= 0.0 {
+                continue;
+            }
+            let v_ref = (u_next[i] - u0[i]) / (2.0 * dt);
+            let a_ref = (u_next[i] - 2.0 * u0[i] + u0[i]) / dt2;
+            assert!((sys.u[i] - u_next[i]).abs() < 1e-12, "u mismatch at {i}");
+            assert!((sys.v[i] - v_ref).abs() < 1e-12, "v mismatch at {i}");
+            assert!((sys.a[i] - a_ref).abs() < 1e-12, "a mismatch at {i}");
+        }
     }
 }

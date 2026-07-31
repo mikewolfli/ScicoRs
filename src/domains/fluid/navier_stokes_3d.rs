@@ -13,6 +13,9 @@ use crate::core::types::Scalar;
 /// Alias for a 3D scalar field slice used in intermediate velocity returns.
 type Field3D = Vec<Vec<Vec<Scalar>>>;
 
+/// Total grid cells above which the pressure-Poisson Jacobi sweep runs on rayon.
+const POISSON_PAR_MIN_CELLS: usize = 200_000;
+
 /// 3D wall boundary condition types.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum WallCondition3D {
@@ -259,9 +262,9 @@ impl NavierStokes3D {
 
     /// Solve pressure Poisson equation ∇²p = (1/dt) ∇·u* using Jacobi iteration.
     ///
-    /// Uses serial Jacobi with a second pressure array for the update.
-    /// (The computationally intensive velocity steps are parallelised;
-    ///  the Poisson solver converges in relatively few iterations.)
+    /// True Jacobi (reads old `p`, writes disjoint `p_new` planes) so the sweep
+    /// is embarrassingly parallel over k-planes — consistent with the velocity
+    /// steps. Small grids stay serial to avoid pool-launch overhead.
     fn solve_pressure_poisson(
         &mut self,
         u_star: &[Vec<Vec<Scalar>>],
@@ -275,10 +278,12 @@ impl NavierStokes3D {
         let dz2 = dz * dz;
 
         let max_iter = 500;
+        let cells = nx.saturating_mul(ny).saturating_mul(nz);
+        let parallel = cells >= POISSON_PAR_MIN_CELLS;
         let mut p_new = self.p.clone();
         for _iter in 0..max_iter {
-            let mut max_diff: Scalar = 0.0;
-            for k in 1..nz - 1 {
+            let compute_plane = |k: usize, pk_new: &mut [Vec<Scalar>]| -> Scalar {
+                let mut local_max: Scalar = 0.0;
                 for i in 1..ny - 1 {
                     for j in 1..nx - 1 {
                         let div_u = (u_star[k][i][j + 1] - u_star[k][i][j]) / dx
@@ -291,13 +296,30 @@ impl NavierStokes3D {
                             - rhs * dx2 * dy2 * dz2)
                             / (dx2 * dy2 + dx2 * dz2 + dy2 * dz2);
                         let diff = (p_val - self.p[k][i][j]).abs();
-                        if diff > max_diff {
-                            max_diff = diff;
+                        if diff > local_max {
+                            local_max = diff;
                         }
-                        p_new[k][i][j] = p_val;
+                        pk_new[i][j] = p_val;
                     }
                 }
-            }
+                local_max
+            };
+            let max_diff: Scalar = if parallel {
+                use rayon::prelude::*;
+                p_new
+                    .par_iter_mut()
+                    .enumerate()
+                    .filter(|(k, _)| *k > 0 && *k < nz - 1)
+                    .map(|(k, plane)| compute_plane(k, plane))
+                    .max_by(|a, b| a.partial_cmp(b).unwrap())
+                    .unwrap_or(0.0)
+            } else {
+                let mut max_diff: Scalar = 0.0;
+                for k in 1..nz - 1 {
+                    max_diff = max_diff.max(compute_plane(k, &mut p_new[k]));
+                }
+                max_diff
+            };
             std::mem::swap(&mut self.p, &mut p_new);
             if max_diff < 1e-6 {
                 break;

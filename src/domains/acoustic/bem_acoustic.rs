@@ -94,67 +94,90 @@ impl AcousticBEM {
             ));
         }
 
-        // Build G (single-layer) and H (double-layer) matrices
-        // Simplified: lumped at nodes using element centroid approximation
+        // Build G (single-layer) and H (double-layer) matrices.
+        // Simplified: lumped at nodes using element centroid approximation.
+        // Each element only touches its 3×3 node block, so contributions are
+        // computed in parallel (per-element partials) and reduced serially
+        // into the dense matrices.
         let mut g_mat = vec![vec![CS::new(0.0, 0.0); n]; n];
         let mut h_mat = vec![vec![CS::new(0.0, 0.0); n]; n];
 
-        for &(ia, ib, ic) in &self.elements {
-            // Element centroid
-            let centre = Coord3D::new(
-                (self.nodes[ia].x + self.nodes[ib].x + self.nodes[ic].x) / 3.0,
-                (self.nodes[ia].y + self.nodes[ib].y + self.nodes[ic].y) / 3.0,
-                (self.nodes[ia].z + self.nodes[ib].z + self.nodes[ic].z) / 3.0,
-            );
-            // Element area (half of cross-product magnitude)
-            let v1 = Coord3D::new(
-                self.nodes[ib].x - self.nodes[ia].x,
-                self.nodes[ib].y - self.nodes[ia].y,
-                self.nodes[ib].z - self.nodes[ia].z,
-            );
-            let v2 = Coord3D::new(
-                self.nodes[ic].x - self.nodes[ia].x,
-                self.nodes[ic].y - self.nodes[ia].y,
-                self.nodes[ic].z - self.nodes[ia].z,
-            );
-            let cross = Coord3D::new(
-                v1.y * v2.z - v1.z * v2.y,
-                v1.z * v2.x - v1.x * v2.z,
-                v1.x * v2.y - v1.y * v2.x,
-            );
-            let area = 0.5 * (cross.x * cross.x + cross.y * cross.y + cross.z * cross.z).sqrt();
-            // Unit normal
-            let norm = (cross.x * cross.x + cross.y * cross.y + cross.z * cross.z)
-                .sqrt()
-                .max(1e-30);
-            let nx = cross.x / norm;
-            let ny = cross.y / norm;
-            let nz = cross.z / norm;
+        /// Elements at which rayon pays for itself.
+        const PAR_MIN_ELEMENTS: usize = 256;
 
-            let elem_nodes = [ia, ib, ic];
+        let element_contrib =
+            |&(ia, ib, ic): &(usize, usize, usize)| -> Vec<(usize, usize, CS, CS)> {
+                // Element centroid
+                let centre = Coord3D::new(
+                    (self.nodes[ia].x + self.nodes[ib].x + self.nodes[ic].x) / 3.0,
+                    (self.nodes[ia].y + self.nodes[ib].y + self.nodes[ic].y) / 3.0,
+                    (self.nodes[ia].z + self.nodes[ib].z + self.nodes[ic].z) / 3.0,
+                );
+                // Element area (half of cross-product magnitude)
+                let v1 = Coord3D::new(
+                    self.nodes[ib].x - self.nodes[ia].x,
+                    self.nodes[ib].y - self.nodes[ia].y,
+                    self.nodes[ib].z - self.nodes[ia].z,
+                );
+                let v2 = Coord3D::new(
+                    self.nodes[ic].x - self.nodes[ia].x,
+                    self.nodes[ic].y - self.nodes[ia].y,
+                    self.nodes[ic].z - self.nodes[ia].z,
+                );
+                let cross = Coord3D::new(
+                    v1.y * v2.z - v1.z * v2.y,
+                    v1.z * v2.x - v1.x * v2.z,
+                    v1.x * v2.y - v1.y * v2.x,
+                );
+                let area = 0.5 * (cross.x * cross.x + cross.y * cross.y + cross.z * cross.z).sqrt();
+                // Unit normal
+                let norm = (cross.x * cross.x + cross.y * cross.y + cross.z * cross.z)
+                    .sqrt()
+                    .max(1e-30);
+                let nx = cross.x / norm;
+                let ny = cross.y / norm;
+                let nz = cross.z / norm;
 
-            for &node_j in &elem_nodes {
-                let pj = self.nodes[node_j];
-                let dx = centre.x - pj.x;
-                let dy = centre.y - pj.y;
-                let dz = centre.z - pj.z;
-                let r = (dx * dx + dy * dy + dz * dz).sqrt();
+                let elem_nodes = [ia, ib, ic];
+                let mut contrib = Vec::with_capacity(9);
 
-                // cos(angle between r and normal)
-                let cos_angle = if r > 1e-30 {
-                    (dx * nx + dy * ny + dz * nz) / r
-                } else {
-                    -0.5 // Self-term approximation
-                };
+                for &node_j in &elem_nodes {
+                    let pj = self.nodes[node_j];
+                    let dx = centre.x - pj.x;
+                    let dy = centre.y - pj.y;
+                    let dz = centre.z - pj.z;
+                    let r = (dx * dx + dy * dy + dz * dz).sqrt();
 
-                let g_val = self.green_f(r);
-                let h_val = self.green_dn(r, cos_angle);
+                    // cos(angle between r and normal)
+                    let cos_angle = if r > 1e-30 {
+                        (dx * nx + dy * ny + dz * nz) / r
+                    } else {
+                        -0.5 // Self-term approximation
+                    };
 
-                for &node_i in &elem_nodes {
-                    // Distribute element contribution to its nodes
-                    g_mat[node_i][node_j] += g_val * area / 3.0;
-                    h_mat[node_i][node_j] += h_val * area / 3.0;
+                    let g_val = self.green_f(r);
+                    let h_val = self.green_dn(r, cos_angle);
+
+                    for &node_i in &elem_nodes {
+                        // Distribute element contribution to its nodes
+                        contrib.push((node_i, node_j, g_val * area / 3.0, h_val * area / 3.0));
+                    }
                 }
+                contrib
+            };
+
+        let contributions: Vec<Vec<(usize, usize, CS, CS)>> =
+            if self.elements.len() >= PAR_MIN_ELEMENTS {
+                use rayon::prelude::*;
+                self.elements.par_iter().map(element_contrib).collect()
+            } else {
+                self.elements.iter().map(element_contrib).collect()
+            };
+
+        for contrib in &contributions {
+            for &(i, j, gv, hv) in contrib {
+                g_mat[i][j] += gv;
+                h_mat[i][j] += hv;
             }
         }
 
@@ -167,9 +190,11 @@ impl AcousticBEM {
         let omega = 2.0 * std::f64::consts::PI * self.frequency;
         let rhs_factor = CS::new(0.0, omega * self.rho);
 
-        // Build RHS: b_i = Σ_j G_ij * (i·ω·ρ·v_n_j)
+        // Build RHS: b_i = Σ_j G_ij * (i·ω·ρ·v_n_j).
+        // Each row is independent → rows run on rayon for large meshes.
         let mut rhs = vec![CS::new(0.0, 0.0); n];
-        for i in 0..n {
+        let build_rhs_row = |i: usize| -> CS {
+            let mut acc = CS::new(0.0, 0.0);
             for (ej, &(_, _, _)) in self.elements.iter().enumerate() {
                 let elem_nodes = [
                     self.elements[ej].0,
@@ -178,8 +203,19 @@ impl AcousticBEM {
                 ];
                 let vn = v_n[ej];
                 for &node_j in &elem_nodes {
-                    rhs[i] += g_mat[i][node_j] * rhs_factor * vn;
+                    acc += g_mat[i][node_j] * rhs_factor * vn;
                 }
+            }
+            acc
+        };
+        if n >= PAR_MIN_ELEMENTS {
+            use rayon::prelude::*;
+            rhs.par_iter_mut().enumerate().for_each(|(i, ri)| {
+                *ri = build_rhs_row(i);
+            });
+        } else {
+            for i in 0..n {
+                rhs[i] = build_rhs_row(i);
             }
         }
 
@@ -218,54 +254,17 @@ impl AcousticBEM {
     }
 }
 
-/// Solve a complex linear system using Gaussian elimination (small BEM systems).
+/// Solve a complex linear system, delegating to the canonical
+/// `core::compute::matrix::solve_complex` (real-embedding Gaussian elimination,
+/// accelerated). `n` is the active system size (may be ≤ the buffer lengths).
 fn solve_complex_bem(a: &[Vec<CS>], b: &[CS], n: usize) -> Result<Vec<CS>, String> {
-    // Augmented matrix
-    let mut aug = vec![vec![CS::new(0.0, 0.0); n + 1]; n];
-    for i in 0..n {
-        for j in 0..n {
-            aug[i][j] = a[i][j];
-        }
-        aug[i][n] = b[i];
-    }
-
-    // Forward elimination
-    for col in 0..n {
-        // Partial pivot
-        let mut max_row = col;
-        for row in (col + 1)..n {
-            if aug[row][col].norm_sqr() > aug[max_row][col].norm_sqr() {
-                max_row = row;
-            }
-        }
-        aug.swap(col, max_row);
-
-        let pivot = aug[col][col];
-        if pivot.norm_sqr() < 1e-30 {
-            return Err("Singular BEM matrix".to_string());
-        }
-
-        for row in (col + 1)..n {
-            let factor = aug[row][col] / pivot;
-            let pivot_row = col;
-            for j in col..=n {
-                let fv = factor;
-                let pv = aug[pivot_row][j];
-                aug[row][j] -= fv * pv;
-            }
-        }
-    }
-
-    // Back substitution
-    let mut x = vec![CS::new(0.0, 0.0); n];
-    for i in (0..n).rev() {
-        let mut sum = CS::new(0.0, 0.0);
-        for j in (i + 1)..n {
-            sum += aug[i][j] * x[j];
-        }
-        x[i] = (aug[i][n] - sum) / aug[i][i];
-    }
-    Ok(x)
+    let a_slice: Vec<Vec<CS>> = a
+        .iter()
+        .take(n)
+        .map(|r| r.iter().take(n).cloned().collect())
+        .collect();
+    let b_slice: Vec<CS> = b.iter().take(n).cloned().collect();
+    crate::core::compute::matrix::solve_complex(&a_slice, &b_slice).map_err(|e| e.message)
 }
 
 #[cfg(test)]
@@ -335,6 +334,107 @@ mod tests {
         // Pressure should be finite
         for &pi in &p {
             assert!(pi.norm_sqr().is_finite());
+        }
+    }
+
+    #[test]
+    fn test_surface_pressure_parallel_matches_serial_reference() {
+        // Planar grid mesh: 21×21 nodes, 800 triangles (> PAR_MIN_ELEMENTS=256)
+        // so both assembly and RHS build take the rayon path. The parallel
+        // assembly reduces per-element partials serially, so results must be
+        // bit-identical to the original serial loop order.
+        let (nx, ny) = (20usize, 20usize);
+        let mut nodes = Vec::new();
+        for j in 0..=ny {
+            for i in 0..=nx {
+                nodes.push(Coord3D::new(i as Scalar * 0.1, j as Scalar * 0.1, 0.0));
+            }
+        }
+        let idx = |i: usize, j: usize| j * (nx + 1) + i;
+        let mut elements = Vec::new();
+        for j in 0..ny {
+            for i in 0..nx {
+                elements.push((idx(i, j), idx(i + 1, j), idx(i, j + 1)));
+                elements.push((idx(i + 1, j), idx(i + 1, j + 1), idx(i, j + 1)));
+            }
+        }
+        let bem = AcousticBEM::new(nodes, elements, 1000.0, 343.0, 1.2);
+        let n = bem.nodes.len();
+        let v_n = vec![0.01; bem.elements.len()];
+        let p = bem.surface_pressure(&v_n).unwrap();
+        assert_eq!(p.len(), n);
+
+        // Serial reference: original per-element accumulation loop order.
+        let mut g_mat = vec![vec![CS::new(0.0, 0.0); n]; n];
+        let mut h_mat = vec![vec![CS::new(0.0, 0.0); n]; n];
+        for &(ia, ib, ic) in &bem.elements {
+            let centre = Coord3D::new(
+                (bem.nodes[ia].x + bem.nodes[ib].x + bem.nodes[ic].x) / 3.0,
+                (bem.nodes[ia].y + bem.nodes[ib].y + bem.nodes[ic].y) / 3.0,
+                (bem.nodes[ia].z + bem.nodes[ib].z + bem.nodes[ic].z) / 3.0,
+            );
+            let v1 = Coord3D::new(
+                bem.nodes[ib].x - bem.nodes[ia].x,
+                bem.nodes[ib].y - bem.nodes[ia].y,
+                bem.nodes[ib].z - bem.nodes[ia].z,
+            );
+            let v2 = Coord3D::new(
+                bem.nodes[ic].x - bem.nodes[ia].x,
+                bem.nodes[ic].y - bem.nodes[ia].y,
+                bem.nodes[ic].z - bem.nodes[ia].z,
+            );
+            let cross = Coord3D::new(
+                v1.y * v2.z - v1.z * v2.y,
+                v1.z * v2.x - v1.x * v2.z,
+                v1.x * v2.y - v1.y * v2.x,
+            );
+            let area = 0.5 * (cross.x * cross.x + cross.y * cross.y + cross.z * cross.z).sqrt();
+            let norm = (cross.x * cross.x + cross.y * cross.y + cross.z * cross.z)
+                .sqrt()
+                .max(1e-30);
+            let (nxu, nyu, nzu) = (cross.x / norm, cross.y / norm, cross.z / norm);
+            for &node_j in &[ia, ib, ic] {
+                let pj = bem.nodes[node_j];
+                let (dx, dy, dz) = (centre.x - pj.x, centre.y - pj.y, centre.z - pj.z);
+                let r = (dx * dx + dy * dy + dz * dz).sqrt();
+                let cos_angle = if r > 1e-30 {
+                    (dx * nxu + dy * nyu + dz * nzu) / r
+                } else {
+                    -0.5
+                };
+                let g_val = bem.green_f(r);
+                let h_val = bem.green_dn(r, cos_angle);
+                for &node_i in &[ia, ib, ic] {
+                    g_mat[node_i][node_j] += g_val * area / 3.0;
+                    h_mat[node_i][node_j] += h_val * area / 3.0;
+                }
+            }
+        }
+        for i in 0..n {
+            h_mat[i][i] += CS::new(0.5, 0.0);
+        }
+        let omega = 2.0 * std::f64::consts::PI * bem.frequency;
+        let rhs_factor = CS::new(0.0, omega * bem.rho);
+        let mut rhs = vec![CS::new(0.0, 0.0); n];
+        for i in 0..n {
+            for (ej, &(_, _, _)) in bem.elements.iter().enumerate() {
+                let en = [bem.elements[ej].0, bem.elements[ej].1, bem.elements[ej].2];
+                for &node_j in &en {
+                    rhs[i] += g_mat[i][node_j] * rhs_factor * v_n[ej];
+                }
+            }
+        }
+        let p_ref = solve_complex_bem(&h_mat, &rhs, n).unwrap();
+
+        for i in 0..n {
+            let diff = (p[i] - p_ref[i]).norm_sqr();
+            let scale = 1.0 + p_ref[i].norm_sqr();
+            assert!(
+                diff < 1e-20 * scale,
+                "pressure mismatch at node {i}: {} vs {}",
+                p[i],
+                p_ref[i]
+            );
         }
     }
 

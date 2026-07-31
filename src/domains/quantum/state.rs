@@ -209,31 +209,29 @@ impl DensityMatrix {
             }
         }
 
-        let mut new_data = vec![ComplexScalar::new(0.0, 0.0); dim * dim];
+        let rho_mat: Vec<Vec<ComplexScalar>> = (0..dim)
+            .map(|i| self.data[i * dim..(i + 1) * dim].to_vec())
+            .collect();
+        let mut acc = vec![vec![ComplexScalar::new(0.0, 0.0); dim]; dim];
         for op in kraus_ops {
-            // K * ρ
-            let mut k_rho = vec![ComplexScalar::new(0.0, 0.0); dim * dim];
+            // K·ρ and (K·ρ)·K† via the SIMD complex gemm (single source of truth).
+            let op_mat: Vec<Vec<ComplexScalar>> = (0..dim)
+                .map(|i| op[i * dim..(i + 1) * dim].to_vec())
+                .collect();
+            let k_rho = crate::core::compute::matrix::mat_mul_complex(&op_mat, &rho_mat)
+                .map_err(|e| e.message)?;
+            let op_dag: Vec<Vec<ComplexScalar>> = (0..dim)
+                .map(|j| (0..dim).map(|i| op_mat[i][j].conj()).collect())
+                .collect();
+            let term = crate::core::compute::matrix::mat_mul_complex(&k_rho, &op_dag)
+                .map_err(|e| e.message)?;
             for i in 0..dim {
                 for j in 0..dim {
-                    let mut s = ComplexScalar::new(0.0, 0.0);
-                    for k in 0..dim {
-                        s += op[i * dim + k] * self.data[k * dim + j];
-                    }
-                    k_rho[i * dim + j] = s;
-                }
-            }
-            // Kρ * K†
-            for i in 0..dim {
-                for j in 0..dim {
-                    let mut s = ComplexScalar::new(0.0, 0.0);
-                    for k in 0..dim {
-                        s += k_rho[i * dim + k] * op[j * dim + k].conj();
-                    }
-                    new_data[i * dim + j] += s;
+                    acc[i][j] += term[i][j];
                 }
             }
         }
-        self.data = new_data;
+        self.data = acc.into_iter().flatten().collect();
         Ok(())
     }
 
@@ -267,30 +265,31 @@ impl DensityMatrix {
     pub fn sqrt(&self) -> Self {
         let dim = self.dim;
         let mut result = self.clone();
-        // Newton-Schulz iteration for matrix square root
+        // Newton-Schulz iteration for matrix square root (matrix products via
+        // the SIMD complex gemm).
         for _ in 0..20 {
-            let mut y = vec![ComplexScalar::new(0.0, 0.0); dim * dim];
-            for i in 0..dim {
-                for j in 0..dim {
-                    let mut s = ComplexScalar::new(0.0, 0.0);
-                    for k in 0..dim {
-                        s += result.data[i * dim + k] * result.data[k * dim + j];
-                    }
-                    y[i * dim + j] = s;
-                }
-            }
+            let y_mat = crate::core::compute::matrix::mat_mul_complex(
+                &(0..dim)
+                    .map(|i| result.data[i * dim..(i + 1) * dim].to_vec())
+                    .collect::<Vec<_>>(),
+                &(0..dim)
+                    .map(|i| result.data[i * dim..(i + 1) * dim].to_vec())
+                    .collect::<Vec<_>>(),
+            )
+            .map(|m| m.into_iter().flatten().collect::<Vec<_>>())
+            .unwrap_or_else(|_| result.data.clone());
             // Y = 0.5 * (Y + ρ * Y⁻¹) — simplified
             // For practical use: just return the Cholesky-like factor
             let mut converged = true;
             for i in 0..dim {
                 for j in 0..dim {
-                    let diff = (y[i * dim + j] - result.data[i * dim + j]).norm();
+                    let diff = (y_mat[i * dim + j] - result.data[i * dim + j]).norm();
                     if diff > 1e-10 {
                         converged = false;
                     }
                 }
             }
-            result.data = y;
+            result.data = y_mat;
             if converged {
                 break;
             }

@@ -570,24 +570,33 @@ impl ImagingSystem {
     }
 
     /// Trace a fan of rays from a given origin with specified angles (radians).
+    ///
+    /// Each ray is an independent trace, so large fans run on rayon
+    /// (order-preserving `filter_map`).
     pub fn trace_fan(
         &self,
         origin: Coord3D,
         angles: &[Scalar],
         wavelength: Scalar,
     ) -> Vec<Vec<TracePoint>> {
-        let mut results = Vec::new();
-        for &theta in angles {
+        /// Rays at which rayon pays for itself.
+        const PAR_MIN_RAYS: usize = 256;
+
+        let trace_one = |&theta: &Scalar| -> Option<Vec<TracePoint>> {
             let mut ray = Ray::new(
                 origin,
                 Coord3D::new(theta.sin(), 0.0, theta.cos()),
                 wavelength,
             );
-            if let Ok(trace) = self.trace_ray(&mut ray) {
-                results.push(trace);
-            }
+            self.trace_ray(&mut ray).ok()
+        };
+
+        if angles.len() >= PAR_MIN_RAYS {
+            use rayon::prelude::*;
+            angles.par_iter().filter_map(trace_one).collect()
+        } else {
+            angles.iter().filter_map(trace_one).collect()
         }
-        results
     }
 
     /// Paraxial ABCD matrix of the system for a given wavelength.
@@ -608,25 +617,41 @@ impl ImagingSystem {
     }
 
     /// Estimate defocus spot radius from ray fan.
+    ///
+    /// Each ray is independent → large fans run on rayon (max-reduction).
     pub fn defocus_spot(&self, source: Coord3D, n_rays: usize) -> Scalar {
         if n_rays == 0 {
             return 0.0;
         }
-        let mut max_r = 0.0;
-        for i in 0..n_rays {
+        /// Rays at which rayon pays for itself.
+        const PAR_MIN_RAYS: usize = 512;
+
+        let ray_radius = |i: usize| -> Scalar {
             let theta = (i as Scalar / n_rays as Scalar) * std::f64::consts::PI * 0.5;
             let mut ray = Ray::new(source, Coord3D::new(theta.sin(), 0.0, theta.cos()), 500e-9);
-            if let Ok(Some(last)) = self.trace_ray(&mut ray).as_ref().map(|v| v.last()) {
-                let r = (last.position.x * last.position.x
-                    + last.position.y * last.position.y
-                    + last.position.z * last.position.z)
-                    .sqrt();
-                if r > max_r {
-                    max_r = r;
-                }
-            }
+            self.trace_ray(&mut ray)
+                .ok()
+                .and_then(|t| t.last().cloned())
+                .map(|p| {
+                    (p.position.x * p.position.x
+                        + p.position.y * p.position.y
+                        + p.position.z * p.position.z)
+                        .sqrt()
+                })
+                .unwrap_or(0.0)
+        };
+
+        let cmp = |a: &Scalar, b: &Scalar| a.partial_cmp(b).unwrap();
+        if n_rays >= PAR_MIN_RAYS {
+            use rayon::prelude::*;
+            (0..n_rays)
+                .into_par_iter()
+                .map(ray_radius)
+                .max_by(cmp)
+                .unwrap_or(0.0)
+        } else {
+            (0..n_rays).map(ray_radius).max_by(cmp).unwrap_or(0.0)
         }
-        max_r
     }
 }
 
@@ -858,5 +883,76 @@ mod tests {
         let trace = sys.trace_ray(&mut ray).unwrap();
         assert_eq!(trace.len(), 1);
         assert_eq!(trace[0].element_name, "lens");
+    }
+
+    #[test]
+    fn test_trace_fan_parallel_matches_serial_reference() {
+        let mut sys = ImagingSystem::new();
+        sys.add_element(Box::new(ThinLens::new(
+            "lens",
+            Coord3D::new(0.0, 0.0, 0.0),
+            Coord3D::new(0.0, 0.0, 1.0),
+            0.1,
+            0.05,
+        )));
+        // 300 angles > PAR_MIN_RAYS=256 → rayon path.
+        let angles: Vec<Scalar> = (0..300).map(|i| (i as Scalar) * 0.001).collect();
+        let origin = Coord3D::new(0.0, 0.0, -0.2);
+        let traced = sys.trace_fan(origin, &angles, 500e-9);
+
+        // Serial reference.
+        let mut ref_traced = Vec::new();
+        for &theta in &angles {
+            let mut ray = Ray::new(origin, Coord3D::new(theta.sin(), 0.0, theta.cos()), 500e-9);
+            if let Ok(trace) = sys.trace_ray(&mut ray) {
+                ref_traced.push(trace);
+            }
+        }
+        assert_eq!(traced.len(), ref_traced.len());
+        for (t, tr) in traced.iter().zip(ref_traced.iter()) {
+            assert_eq!(t.len(), tr.len());
+            for (a, b) in t.iter().zip(tr.iter()) {
+                assert!((a.position.x - b.position.x).abs() < 1e-12);
+                assert!((a.position.z - b.position.z).abs() < 1e-12);
+            }
+        }
+    }
+
+    #[test]
+    fn test_defocus_spot_parallel_matches_serial_reference() {
+        let mut sys = ImagingSystem::new();
+        sys.add_element(Box::new(ThinLens::new(
+            "lens",
+            Coord3D::new(0.0, 0.0, 0.0),
+            Coord3D::new(0.0, 0.0, 1.0),
+            0.1,
+            0.05,
+        )));
+        // 600 rays > PAR_MIN_RAYS=512 → rayon max-reduction path.
+        let n_rays = 600;
+        let spot = sys.defocus_spot(Coord3D::new(0.0, 0.0, -0.2), n_rays);
+
+        let mut max_r = 0.0;
+        for i in 0..n_rays {
+            let theta = (i as Scalar / n_rays as Scalar) * std::f64::consts::PI * 0.5;
+            let mut ray = Ray::new(
+                Coord3D::new(0.0, 0.0, -0.2),
+                Coord3D::new(theta.sin(), 0.0, theta.cos()),
+                500e-9,
+            );
+            if let Ok(Some(last)) = sys.trace_ray(&mut ray).as_ref().map(|v| v.last()) {
+                let r = (last.position.x * last.position.x
+                    + last.position.y * last.position.y
+                    + last.position.z * last.position.z)
+                    .sqrt();
+                if r > max_r {
+                    max_r = r;
+                }
+            }
+        }
+        assert!(
+            (spot - max_r).abs() < 1e-12,
+            "defocus mismatch: {spot} vs {max_r}"
+        );
     }
 }

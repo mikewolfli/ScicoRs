@@ -84,87 +84,78 @@ impl MultibodySystem {
     /// - External forces: `F_ext`
     /// - Gyroscopic term (simplified): `-ω × (I·ω)`
     pub fn assemble_eom(&self) -> (Vec<[Scalar; 3]>, Vec<[Scalar; 3]>) {
-        let n = self.bodies.len();
-        let mut lin_acc = vec![[0.0; 3]; n];
-        let mut ang_acc = vec![[0.0; 3]; n];
-
-        // Build a map from body_id to index
-        let _id_map: std::collections::HashMap<&str, usize> = self
+        // Each body's accelerations depend only on its own state and the
+        // read-only force list → bodies run on rayon (order-preserving).
+        use rayon::prelude::*;
+        let per_body: Vec<([Scalar; 3], [Scalar; 3])> = self
             .bodies
-            .iter()
-            .enumerate()
-            .map(|(i, b)| (b.id.as_str(), i))
+            .par_iter()
+            .map(|body| {
+                let m = if body.mass > 0.0 {
+                    1.0 / body.mass
+                } else {
+                    0.0
+                };
+
+                // Gravity
+                let mut lin = [self.gravity[0], self.gravity[1], self.gravity[2]];
+                let mut ang = [0.0; 3];
+
+                // External forces
+                for f in &self.forces {
+                    if f.body_id == body.id {
+                        lin[0] += f.force[0] * m;
+                        lin[1] += f.force[1] * m;
+                        lin[2] += f.force[2] * m;
+
+                        // Torque from off-COM force: τ = r × F
+                        let r = [
+                            f.application_point.x - body.position.x,
+                            f.application_point.y - body.position.y,
+                            f.application_point.z - body.position.z,
+                        ];
+                        let torque = [
+                            r[1] * f.force[2] - r[2] * f.force[1],
+                            r[2] * f.force[0] - r[0] * f.force[2],
+                            r[0] * f.force[1] - r[1] * f.force[0],
+                        ];
+                        let inv_i = body.inverse_inertia();
+                        ang[0] += inv_i[0][0] * torque[0]
+                            + inv_i[0][1] * torque[1]
+                            + inv_i[0][2] * torque[2];
+                        ang[1] += inv_i[1][0] * torque[0]
+                            + inv_i[1][1] * torque[1]
+                            + inv_i[1][2] * torque[2];
+                        ang[2] += inv_i[2][0] * torque[0]
+                            + inv_i[2][1] * torque[1]
+                            + inv_i[2][2] * torque[2];
+                    }
+                }
+
+                // Gyroscopic term: -I⁻¹ · (ω × I·ω)
+                let w = body.angular_velocity;
+                let inertia = body.inertia;
+                let iw = [
+                    inertia[0][0] * w[0] + inertia[0][1] * w[1] + inertia[0][2] * w[2],
+                    inertia[1][0] * w[0] + inertia[1][1] * w[1] + inertia[1][2] * w[2],
+                    inertia[2][0] * w[0] + inertia[2][1] * w[1] + inertia[2][2] * w[2],
+                ];
+                let gyro = [
+                    w[1] * iw[2] - w[2] * iw[1],
+                    w[2] * iw[0] - w[0] * iw[2],
+                    w[0] * iw[1] - w[1] * iw[0],
+                ];
+                let inv_i = body.inverse_inertia();
+                ang[0] -= inv_i[0][0] * gyro[0] + inv_i[0][1] * gyro[1] + inv_i[0][2] * gyro[2];
+                ang[1] -= inv_i[1][0] * gyro[0] + inv_i[1][1] * gyro[1] + inv_i[1][2] * gyro[2];
+                ang[2] -= inv_i[2][0] * gyro[0] + inv_i[2][1] * gyro[1] + inv_i[2][2] * gyro[2];
+
+                (lin, ang)
+            })
             .collect();
 
-        for (i, body) in self.bodies.iter().enumerate() {
-            let m = if body.mass > 0.0 {
-                1.0 / body.mass
-            } else {
-                0.0
-            };
-
-            // Gravity
-            lin_acc[i][0] += self.gravity[0];
-            lin_acc[i][1] += self.gravity[1];
-            lin_acc[i][2] += self.gravity[2];
-
-            // External forces
-            for f in &self.forces {
-                if f.body_id == body.id {
-                    lin_acc[i][0] += f.force[0] * m;
-                    lin_acc[i][1] += f.force[1] * m;
-                    lin_acc[i][2] += f.force[2] * m;
-
-                    // Torque from off-COM force: τ = r × F
-                    let r = [
-                        f.application_point.x - body.position.x,
-                        f.application_point.y - body.position.y,
-                        f.application_point.z - body.position.z,
-                    ];
-                    let torque = [
-                        r[1] * f.force[2] - r[2] * f.force[1],
-                        r[2] * f.force[0] - r[0] * f.force[2],
-                        r[0] * f.force[1] - r[1] * f.force[0],
-                    ];
-                    let inv_i = body.inverse_inertia();
-                    ang_acc[i][0] +=
-                        inv_i[0][0] * torque[0] + inv_i[0][1] * torque[1] + inv_i[0][2] * torque[2];
-                    ang_acc[i][1] +=
-                        inv_i[1][0] * torque[0] + inv_i[1][1] * torque[1] + inv_i[1][2] * torque[2];
-                    ang_acc[i][2] +=
-                        inv_i[2][0] * torque[0] + inv_i[2][1] * torque[1] + inv_i[2][2] * torque[2];
-                }
-            }
-
-            // Gyroscopic term: -I⁻¹ · (ω × I·ω)
-            let w = body.angular_velocity;
-            let inertia = body.inertia;
-            let iw = [
-                inertia[0][0] * w[0] + inertia[0][1] * w[1] + inertia[0][2] * w[2],
-                inertia[1][0] * w[0] + inertia[1][1] * w[1] + inertia[1][2] * w[2],
-                inertia[2][0] * w[0] + inertia[2][1] * w[1] + inertia[2][2] * w[2],
-            ];
-            let gyro = [
-                w[1] * iw[2] - w[2] * iw[1],
-                w[2] * iw[0] - w[0] * iw[2],
-                w[0] * iw[1] - w[1] * iw[0],
-            ];
-            let inv_i: [[Scalar; 3]; 3] = body.inverse_inertia();
-            let inv_i00 = inv_i[0][0];
-            let inv_i01 = inv_i[0][1];
-            let inv_i02 = inv_i[0][2];
-            let inv_i10 = inv_i[1][0];
-            let inv_i11 = inv_i[1][1];
-            let inv_i12 = inv_i[1][2];
-            let inv_i20 = inv_i[2][0];
-            let inv_i21 = inv_i[2][1];
-            let inv_i22 = inv_i[2][2];
-            let idx = i;
-            ang_acc[idx][0] -= inv_i00 * gyro[0] + inv_i01 * gyro[1] + inv_i02 * gyro[2];
-            ang_acc[idx][1] -= inv_i10 * gyro[0] + inv_i11 * gyro[1] + inv_i12 * gyro[2];
-            ang_acc[idx][2] -= inv_i20 * gyro[0] + inv_i21 * gyro[1] + inv_i22 * gyro[2];
-        }
-
+        let lin_acc = per_body.iter().map(|&(l, _)| l).collect();
+        let ang_acc = per_body.iter().map(|&(_, a)| a).collect();
         (lin_acc, ang_acc)
     }
 
@@ -485,5 +476,94 @@ mod tests {
         sys.semi_implicit_euler_step(0.1).unwrap();
         // Position should advance by v*dt = 5*0.1 = 0.5
         assert!((sys.bodies[0].position.x - 0.5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_assemble_eom_parallel_matches_serial_reference() {
+        // assemble_eom() runs on rayon (per-body); verify against the
+        // original serial formulas on a multi-body system with off-COM forces.
+        let mut sys = MultibodySystem::new();
+        for i in 0..8 {
+            let mut b = simple_body(
+                &format!("b{i}"),
+                Coord3D::new(i as Scalar, 0.0, i as Scalar),
+            );
+            b.mass = 1.0 + i as Scalar;
+            sys.add_body(b);
+        }
+        sys.add_force(ExternalForce {
+            body_id: "b2".into(),
+            force: [10.0, 2.0, 0.0],
+            application_point: Coord3D::new(1.0, 0.5, 0.0),
+        });
+        sys.add_force(ExternalForce {
+            body_id: "b5".into(),
+            force: [0.0, 0.0, 5.0],
+            application_point: Coord3D::new(0.0, 0.0, 2.0),
+        });
+
+        let (lin_acc, ang_acc) = sys.assemble_eom();
+
+        // Serial reference (original per-body formulas).
+        for (i, body) in sys.bodies.iter().enumerate() {
+            let m = if body.mass > 0.0 {
+                1.0 / body.mass
+            } else {
+                0.0
+            };
+            let mut lin = [sys.gravity[0], sys.gravity[1], sys.gravity[2]];
+            let mut ang = [0.0; 3];
+            for f in &sys.forces {
+                if f.body_id == body.id {
+                    lin[0] += f.force[0] * m;
+                    lin[1] += f.force[1] * m;
+                    lin[2] += f.force[2] * m;
+                    let r = [
+                        f.application_point.x - body.position.x,
+                        f.application_point.y - body.position.y,
+                        f.application_point.z - body.position.z,
+                    ];
+                    let torque = [
+                        r[1] * f.force[2] - r[2] * f.force[1],
+                        r[2] * f.force[0] - r[0] * f.force[2],
+                        r[0] * f.force[1] - r[1] * f.force[0],
+                    ];
+                    let inv_i = body.inverse_inertia();
+                    ang[0] +=
+                        inv_i[0][0] * torque[0] + inv_i[0][1] * torque[1] + inv_i[0][2] * torque[2];
+                    ang[1] +=
+                        inv_i[1][0] * torque[0] + inv_i[1][1] * torque[1] + inv_i[1][2] * torque[2];
+                    ang[2] +=
+                        inv_i[2][0] * torque[0] + inv_i[2][1] * torque[1] + inv_i[2][2] * torque[2];
+                }
+            }
+            let w = body.angular_velocity;
+            let inertia = body.inertia;
+            let iw = [
+                inertia[0][0] * w[0] + inertia[0][1] * w[1] + inertia[0][2] * w[2],
+                inertia[1][0] * w[0] + inertia[1][1] * w[1] + inertia[1][2] * w[2],
+                inertia[2][0] * w[0] + inertia[2][1] * w[1] + inertia[2][2] * w[2],
+            ];
+            let gyro = [
+                w[1] * iw[2] - w[2] * iw[1],
+                w[2] * iw[0] - w[0] * iw[2],
+                w[0] * iw[1] - w[1] * iw[0],
+            ];
+            let inv_i = body.inverse_inertia();
+            ang[0] -= inv_i[0][0] * gyro[0] + inv_i[0][1] * gyro[1] + inv_i[0][2] * gyro[2];
+            ang[1] -= inv_i[1][0] * gyro[0] + inv_i[1][1] * gyro[1] + inv_i[1][2] * gyro[2];
+            ang[2] -= inv_i[2][0] * gyro[0] + inv_i[2][1] * gyro[1] + inv_i[2][2] * gyro[2];
+
+            for c in 0..3 {
+                assert!(
+                    (lin_acc[i][c] - lin[c]).abs() < 1e-12,
+                    "lin mismatch body {i} comp {c}"
+                );
+                assert!(
+                    (ang_acc[i][c] - ang[c]).abs() < 1e-12,
+                    "ang mismatch body {i} comp {c}"
+                );
+            }
+        }
     }
 }

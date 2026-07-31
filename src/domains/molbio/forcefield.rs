@@ -26,7 +26,11 @@ impl Vec3 {
     }
 
     pub fn zero() -> Self {
-        Self { x: 0.0, y: 0.0, z: 0.0 }
+        Self {
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+        }
     }
 
     pub fn distance(&self, other: &Vec3) -> Scalar {
@@ -340,7 +344,11 @@ impl ForceField {
         // Lennard-Jones energy (pairwise, excluding 1-2 and 1-3 pairs)
         let excluded = build_exclusion_list(&self.bonds, &self.angles, coords.len());
         for i in 0..coords.len() {
-            let lj_i = self.lj_params.iter().find(|(idx, _)| *idx == i).map(|(_, p)| *p);
+            let lj_i = self
+                .lj_params
+                .iter()
+                .find(|(idx, _)| *idx == i)
+                .map(|(_, p)| *p);
             if lj_i.is_none() {
                 continue;
             }
@@ -349,7 +357,11 @@ impl ForceField {
                 if excluded[i].contains(&j) {
                     continue;
                 }
-                let lj_j = self.lj_params.iter().find(|(idx, _)| *idx == j).map(|(_, p)| *p);
+                let lj_j = self
+                    .lj_params
+                    .iter()
+                    .find(|(idx, _)| *idx == j)
+                    .map(|(_, p)| *p);
                 if lj_j.is_none() {
                     continue;
                 }
@@ -361,7 +373,11 @@ impl ForceField {
 
         // Electrostatic energy (pairwise, excluding 1-2 and 1-3 pairs)
         for i in 0..coords.len() {
-            let qi = self.charges.iter().find(|(idx, _)| *idx == i).map(|(_, q)| *q);
+            let qi = self
+                .charges
+                .iter()
+                .find(|(idx, _)| *idx == i)
+                .map(|(_, q)| *q);
             if qi.is_none() || qi.unwrap().abs() < 1e-10 {
                 continue;
             }
@@ -370,7 +386,11 @@ impl ForceField {
                 if excluded[i].contains(&j) {
                     continue;
                 }
-                let qj = self.charges.iter().find(|(idx, _)| *idx == j).map(|(_, q)| *q);
+                let qj = self
+                    .charges
+                    .iter()
+                    .find(|(idx, _)| *idx == j)
+                    .map(|(_, q)| *q);
                 if qj.is_none() || qj.unwrap().abs() < 1e-10 {
                     continue;
                 }
@@ -421,61 +441,166 @@ impl ForceField {
 
         // Lennard-Jones forces (pairwise)
         let excluded = build_exclusion_list(&self.bonds, &self.angles, n);
-        for i in 0..n {
-            let lj_i = match lj_by_id[i] {
-                Some(p) => p,
-                None => continue,
-            };
-            for j in (i + 1)..n {
-                if excluded[i].contains(&j) {
-                    continue;
-                }
-                let lj_j = match lj_by_id[j] {
+        // Parallel over `i` with per-worker partial force buffers (each pair
+        // (i,j), i<j, is handled by exactly one worker which writes to its own
+        // buffer at both i and j — no data race on the shared `forces`). For
+        // small systems the serial loop avoids pool-launch overhead.
+        let lj_forces: Vec<Vec3> = if n >= PAIR_PAR_MIN {
+            use rayon::prelude::*;
+            (0..n)
+                .into_par_iter()
+                .fold(
+                    || vec![Vec3::zero(); n],
+                    |mut pf, i| {
+                        let lj_i = match lj_by_id[i] {
+                            Some(p) => p,
+                            None => return pf,
+                        };
+                        for j in (i + 1)..n {
+                            if excluded[i].contains(&j) {
+                                continue;
+                            }
+                            let lj_j = match lj_by_id[j] {
+                                Some(p) => p,
+                                None => continue,
+                            };
+                            let lj_ij = lj_i.combine_lorentz_berthelot(&lj_j);
+                            let rij = coords[j].subtract(&coords[i]);
+                            let r = rij.norm();
+                            if r < 1e-15 {
+                                continue;
+                            }
+                            let f_mag = lj_ij.force(r);
+                            let dir = rij.scale(1.0 / r);
+                            pf[i] = pf[i].add(&dir.scale(-f_mag));
+                            pf[j] = pf[j].add(&dir.scale(f_mag));
+                        }
+                        pf
+                    },
+                )
+                .reduce(
+                    || vec![Vec3::zero(); n],
+                    |mut a, b| {
+                        for (x, y) in a.iter_mut().zip(b.iter()) {
+                            *x = x.add(y);
+                        }
+                        a
+                    },
+                )
+        } else {
+            let mut forces_ser = vec![Vec3::zero(); n];
+            for i in 0..n {
+                let lj_i = match lj_by_id[i] {
                     Some(p) => p,
                     None => continue,
                 };
-                let lj_ij = lj_i.combine_lorentz_berthelot(&lj_j);
-                let rij = coords[j].subtract(&coords[i]);
-                let r = rij.norm();
-                if r < 1e-15 {
-                    continue;
+                for j in (i + 1)..n {
+                    if excluded[i].contains(&j) {
+                        continue;
+                    }
+                    let lj_j = match lj_by_id[j] {
+                        Some(p) => p,
+                        None => continue,
+                    };
+                    let lj_ij = lj_i.combine_lorentz_berthelot(&lj_j);
+                    let rij = coords[j].subtract(&coords[i]);
+                    let r = rij.norm();
+                    if r < 1e-15 {
+                        continue;
+                    }
+                    let f_mag = lj_ij.force(r);
+                    let dir = rij.scale(1.0 / r);
+                    forces_ser[i] = forces_ser[i].add(&dir.scale(-f_mag));
+                    forces_ser[j] = forces_ser[j].add(&dir.scale(f_mag));
                 }
-                let f_mag = lj_ij.force(r);
-                let dir = rij.scale(1.0 / r);
-                forces[i] = forces[i].add(&dir.scale(-f_mag));
-                forces[j] = forces[j].add(&dir.scale(f_mag));
             }
+            forces_ser
+        };
+        for (f, pf) in forces.iter_mut().zip(lj_forces.iter()) {
+            *f = f.add(pf);
         }
 
         // Coulomb forces (pairwise)
-        for i in 0..n {
-            let qi = charge_by_id[i];
-            if qi.abs() < 1e-10 {
-                continue;
+        let coul_forces: Vec<Vec3> = if n >= PAIR_PAR_MIN {
+            use rayon::prelude::*;
+            (0..n)
+                .into_par_iter()
+                .fold(
+                    || vec![Vec3::zero(); n],
+                    |mut pf, i| {
+                        let qi = charge_by_id[i];
+                        if qi.abs() < 1e-10 {
+                            return pf;
+                        }
+                        for j in (i + 1)..n {
+                            if excluded[i].contains(&j) {
+                                continue;
+                            }
+                            let qj = charge_by_id[j];
+                            if qj.abs() < 1e-10 {
+                                continue;
+                            }
+                            let rij = coords[j].subtract(&coords[i]);
+                            let r = rij.norm();
+                            if r < 1e-15 {
+                                continue;
+                            }
+                            let f_mag = self.coulomb.force(qi, qj, r);
+                            let dir = rij.scale(1.0 / r);
+                            pf[i] = pf[i].add(&dir.scale(-f_mag));
+                            pf[j] = pf[j].add(&dir.scale(f_mag));
+                        }
+                        pf
+                    },
+                )
+                .reduce(
+                    || vec![Vec3::zero(); n],
+                    |mut a, b| {
+                        for (x, y) in a.iter_mut().zip(b.iter()) {
+                            *x = x.add(y);
+                        }
+                        a
+                    },
+                )
+        } else {
+            let mut forces_ser = vec![Vec3::zero(); n];
+            for i in 0..n {
+                let qi = charge_by_id[i];
+                if qi.abs() < 1e-10 {
+                    continue;
+                }
+                for j in (i + 1)..n {
+                    if excluded[i].contains(&j) {
+                        continue;
+                    }
+                    let qj = charge_by_id[j];
+                    if qj.abs() < 1e-10 {
+                        continue;
+                    }
+                    let rij = coords[j].subtract(&coords[i]);
+                    let r = rij.norm();
+                    if r < 1e-15 {
+                        continue;
+                    }
+                    let f_mag = self.coulomb.force(qi, qj, r);
+                    let dir = rij.scale(1.0 / r);
+                    forces_ser[i] = forces_ser[i].add(&dir.scale(-f_mag));
+                    forces_ser[j] = forces_ser[j].add(&dir.scale(f_mag));
+                }
             }
-            for j in (i + 1)..n {
-                if excluded[i].contains(&j) {
-                    continue;
-                }
-                let qj = charge_by_id[j];
-                if qj.abs() < 1e-10 {
-                    continue;
-                }
-                let rij = coords[j].subtract(&coords[i]);
-                let r = rij.norm();
-                if r < 1e-15 {
-                    continue;
-                }
-                let f_mag = self.coulomb.force(qi, qj, r);
-                let dir = rij.scale(1.0 / r);
-                forces[i] = forces[i].add(&dir.scale(-f_mag));
-                forces[j] = forces[j].add(&dir.scale(f_mag));
-            }
+            forces_ser
+        };
+        for (f, pf) in forces.iter_mut().zip(coul_forces.iter()) {
+            *f = f.add(pf);
         }
 
         forces
     }
 }
+
+/// Atom count at which the pairwise force loops switch to rayon (per-worker
+/// partial buffers avoid the symmetric `forces[i] += / forces[j] +=` race).
+const PAIR_PAR_MIN: usize = 64;
 
 impl Default for ForceField {
     fn default() -> Self {
@@ -648,5 +773,58 @@ mod tests {
         // Stretched bond → atoms pulled inward
         assert!(forces[0].x > 0.0); // atom 0 pulled toward 1
         assert!(forces[1].x < 0.0); // atom 1 pulled toward 0
+    }
+
+    #[test]
+    fn test_parallel_pair_forces_match_serial_reference() {
+        // 70 atoms ≥ PAIR_PAR_MIN → exercises the rayon path. Compare the
+        // parallel result against an independent serial pairwise reference
+        // (LJ + Coulomb, no bonds).
+        let n = 70;
+        let mut ff = ForceField::new();
+        for i in 0..n {
+            ff.add_lj(i, LennardJones::new(3.0, 0.2));
+            ff.add_charge(i, if i % 2 == 0 { 1.0 } else { -1.0 });
+        }
+        let coords: Vec<Vec3> = (0..n)
+            .map(|i| {
+                // Lattice with spacing ≥ 2.0 Å → no r<0.5 singularity guards,
+                // so forces stay moderate and float reordering is < 1e-9.
+                let x = (i % 10) as Scalar * 2.0;
+                let y = ((i / 10) % 7) as Scalar * 2.0;
+                let z = (i / 70) as Scalar * 2.0;
+                Vec3::new(x + 0.1 * (i % 3) as Scalar, y, z)
+            })
+            .collect();
+        let got = ff.compute_forces(&coords);
+        assert!(n >= PAIR_PAR_MIN, "test must cross the parallel threshold");
+        // Serial reference.
+        let mut want = vec![Vec3::zero(); n];
+        for i in 0..n {
+            let lj_i = LennardJones::new(3.0, 0.2);
+            let qi = if i % 2 == 0 { 1.0 } else { -1.0 };
+            for j in (i + 1)..n {
+                let lj_j = LennardJones::new(3.0, 0.2);
+                let lj_ij = lj_i.combine_lorentz_berthelot(&lj_j);
+                let rij = coords[j].subtract(&coords[i]);
+                let r = rij.norm();
+                if r < 1e-15 {
+                    continue;
+                }
+                let dir = rij.scale(1.0 / r);
+                let f_mag = lj_ij.force(r)
+                    + CoulombPotential::vacuum().force(qi, if j % 2 == 0 { 1.0 } else { -1.0 }, r);
+                want[i] = want[i].add(&dir.scale(-f_mag));
+                want[j] = want[j].add(&dir.scale(f_mag));
+            }
+        }
+        for k in 0..n {
+            assert!(
+                (got[k].x - want[k].x).abs() < 1e-9
+                    && (got[k].y - want[k].y).abs() < 1e-9
+                    && (got[k].z - want[k].z).abs() < 1e-9,
+                "parallel force mismatch at atom {k}"
+            );
+        }
     }
 }

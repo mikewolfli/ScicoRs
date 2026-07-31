@@ -59,15 +59,8 @@ pub fn subspace_eigen(
         // Solve K·ψ_j = M·φ_j for each j
         let mut psi = vec![vec![0.0; n_modes]; n];
         for j in 0..n_modes {
-            let rhs: Vec<Scalar> = (0..n)
-                .map(|i| {
-                    let mut s = 0.0;
-                    for k_idx in 0..n {
-                        s += m[i][k_idx] * phi[k_idx][j];
-                    }
-                    s
-                })
-                .collect();
+            let phi_col: Vec<Scalar> = (0..n).map(|i| phi[i][j]).collect();
+            let rhs = super::matrix::mat_vec_mul(m, &phi_col)?;
             let k_copy = k.to_vec();
             match solve_linear(&k_copy, &rhs) {
                 Ok(x) => {
@@ -85,21 +78,14 @@ pub fn subspace_eigen(
         }
 
         // Project K and M into the subspace: K_proj = ψ^T·K·ψ, M_proj = ψ^T·M·ψ
-        let k_proj = project_matrix(k, &psi, n_modes);
-        let m_proj = project_matrix(m, &psi, n_modes);
+        let k_proj = project_matrix(k, &psi, n_modes)?;
+        let m_proj = project_matrix(m, &psi, n_modes)?;
 
         // Solve dense n_modes×n_modes eigenproblem via Jacobi iteration
         let (eigenvalues, eigenvectors) = solve_reduced_eigen(&k_proj, &m_proj, n_modes);
 
-        // Reconstruct full-space vectors: φ_new = ψ · eigenvectors
-        let mut new_phi = vec![vec![0.0; n_modes]; n];
-        for i in 0..n {
-            for j in 0..n_modes {
-                for k_idx in 0..n_modes {
-                    new_phi[i][j] += psi[i][k_idx] * eigenvectors[k_idx][j];
-                }
-            }
-        }
+        // Reconstruct full-space vectors: φ_new = ψ · eigenvectors (SIMD gemm)
+        let mut new_phi = super::matrix::mat_mul(&psi, &eigenvectors)?;
 
         // Orthonormalize w.r.t. M
         for j in 0..n_modes {
@@ -132,29 +118,20 @@ pub fn subspace_eigen(
 /// projection, then normalize so that φ_j^T · M · φ_j = 1.
 fn orthonormalize_m(phi: &mut [Vec<Scalar>], m: &[Vec<Scalar>], j: usize) -> Result<(), SimError> {
     let n = phi.len();
-    // Gram-Schmidt against previous vectors
+    // Gram-Schmidt against previous vectors (M·φ_k via the SIMD mat-vec).
     for k in 0..j {
-        let mut inner = 0.0;
-        for i in 0..n {
-            let mut m_phi_k = 0.0;
-            for l in 0..n {
-                m_phi_k += m[i][l] * phi[l][k];
-            }
-            inner += m_phi_k * phi[i][j];
-        }
+        let phi_k: Vec<Scalar> = (0..n).map(|i| phi[i][k]).collect();
+        let m_phi_k = super::matrix::mat_vec_mul(m, &phi_k)?;
+        let phi_j: Vec<Scalar> = (0..n).map(|i| phi[i][j]).collect();
+        let inner: Scalar = m_phi_k.iter().zip(phi_j.iter()).map(|(a, b)| a * b).sum();
         for i in 0..n {
             phi[i][j] -= inner * phi[i][k];
         }
     }
     // Normalize: φ_j^T · M · φ_j = 1
-    let mut norm_sq = 0.0;
-    for i in 0..n {
-        let mut m_phi_j = 0.0;
-        for l in 0..n {
-            m_phi_j += m[i][l] * phi[l][j];
-        }
-        norm_sq += m_phi_j * phi[i][j];
-    }
+    let phi_j: Vec<Scalar> = (0..n).map(|i| phi[i][j]).collect();
+    let m_phi_j = super::matrix::mat_vec_mul(m, &phi_j)?;
+    let norm_sq: Scalar = m_phi_j.iter().zip(phi_j.iter()).map(|(a, b)| a * b).sum();
     if norm_sq <= 0.0 {
         return Err(SimError::numerical(
             "Zero norm in subspace orthonormalization",
@@ -168,24 +145,19 @@ fn orthonormalize_m(phi: &mut [Vec<Scalar>], m: &[Vec<Scalar>], j: usize) -> Res
 }
 
 /// Project a matrix `a` into the subspace spanned by `psi`:
-/// `A_proj = ψ^T · a · ψ`  (n_modes × n_modes).
-fn project_matrix(a: &[Vec<Scalar>], psi: &[Vec<Scalar>], n_modes: usize) -> Vec<Vec<Scalar>> {
+/// `A_proj = ψ^T · a · ψ`  (n_modes × n_modes), via two SIMD gemms.
+fn project_matrix(
+    a: &[Vec<Scalar>],
+    psi: &[Vec<Scalar>],
+    n_modes: usize,
+) -> Result<Vec<Vec<Scalar>>, SimError> {
     let n = a.len();
-    let mut proj = vec![vec![0.0; n_modes]; n_modes];
-    for i in 0..n_modes {
-        for j in 0..n_modes {
-            let mut s = 0.0;
-            for p in 0..n {
-                let mut a_psi = 0.0;
-                for q in 0..n {
-                    a_psi += a[p][q] * psi[q][j];
-                }
-                s += psi[p][i] * a_psi;
-            }
-            proj[i][j] = s;
-        }
-    }
-    proj
+    // ψᵀ (n_modes×n), then tmp = ψᵀ·a, then proj = tmp·ψ.
+    let psi_t: Vec<Vec<Scalar>> = (0..n_modes)
+        .map(|i| (0..n).map(|j| psi[j][i]).collect())
+        .collect();
+    let tmp = super::matrix::mat_mul(&psi_t, a)?;
+    super::matrix::mat_mul(&tmp, psi)
 }
 
 /// Solve the dense generalized eigenvalue problem `K_proj · v = λ · M_proj · v`

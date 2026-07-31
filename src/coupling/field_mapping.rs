@@ -4,6 +4,9 @@ use super::bus::FieldMappingMethod;
 use crate::core::coord::Coord3D;
 use crate::core::types::Scalar;
 
+/// Target×source work units above which the per-target loops run on rayon.
+const PAR_MIN_WORK: usize = 200_000;
+
 /// Radial basis function types.
 pub enum RbfType {
     Gaussian(Scalar),
@@ -57,20 +60,25 @@ impl FieldMapper {
     }
 
     pub fn nearest_neighbor(src: &[Coord3D], vals: &[Scalar], tgt: &[Coord3D]) -> Vec<Scalar> {
-        tgt.iter()
-            .map(|tp| {
-                let mut best_dist = Scalar::MAX;
-                let mut best_val = 0.0;
-                for (sp, &v) in src.iter().zip(vals.iter()) {
-                    let d = tp.distance(sp);
-                    if d < best_dist {
-                        best_dist = d;
-                        best_val = v;
-                    }
+        let work = tgt.len().saturating_mul(src.len());
+        let compute = |tp: &Coord3D| {
+            let mut best_dist = Scalar::MAX;
+            let mut best_val = 0.0;
+            for (sp, &v) in src.iter().zip(vals.iter()) {
+                let d = tp.distance(sp);
+                if d < best_dist {
+                    best_dist = d;
+                    best_val = v;
                 }
-                best_val
-            })
-            .collect()
+            }
+            best_val
+        };
+        if work < PAR_MIN_WORK {
+            tgt.iter().map(compute).collect()
+        } else {
+            use rayon::prelude::*;
+            tgt.par_iter().map(compute).collect()
+        }
     }
 
     pub fn inverse_distance_weighted(
@@ -79,19 +87,24 @@ impl FieldMapper {
         tgt: &[Coord3D],
         power: Scalar,
     ) -> Vec<Scalar> {
-        tgt.iter()
-            .map(|tp| {
-                let mut num = 0.0;
-                let mut den = 0.0;
-                for (sp, &v) in src.iter().zip(vals.iter()) {
-                    let d = tp.distance(sp).max(1e-15);
-                    let w = 1.0 / d.powf(power);
-                    num += w * v;
-                    den += w;
-                }
-                if den > 0.0 { num / den } else { 0.0 }
-            })
-            .collect()
+        let work = tgt.len().saturating_mul(src.len());
+        let compute = |tp: &Coord3D| {
+            let mut num = 0.0;
+            let mut den = 0.0;
+            for (sp, &v) in src.iter().zip(vals.iter()) {
+                let d = tp.distance(sp).max(1e-15);
+                let w = 1.0 / d.powf(power);
+                num += w * v;
+                den += w;
+            }
+            if den > 0.0 { num / den } else { 0.0 }
+        };
+        if work < PAR_MIN_WORK {
+            tgt.iter().map(compute).collect()
+        } else {
+            use rayon::prelude::*;
+            tgt.par_iter().map(compute).collect()
+        }
     }
 
     pub fn radial_basis_interpolation(
@@ -116,18 +129,22 @@ impl FieldMapper {
         let w = crate::core::compute::solve_linear(&a, vals)
             .map_err(|e| format!("RBF solve failed: {}", e))?;
 
-        // Evaluate at target points
-        let result: Vec<Scalar> = tgt
-            .iter()
-            .map(|tp| {
-                let mut s = 0.0;
-                for (sp, &wi) in src.iter().zip(w.iter()) {
-                    let r = tp.distance(sp);
-                    s += wi * rbf_eval(r, &rbf);
-                }
-                s
-            })
-            .collect();
+        // Evaluate at target points (parallel for large target sets)
+        let work = tgt.len().saturating_mul(src.len());
+        let compute = |tp: &Coord3D| {
+            let mut s = 0.0;
+            for (sp, &wi) in src.iter().zip(w.iter()) {
+                let r = tp.distance(sp);
+                s += wi * rbf_eval(r, &rbf);
+            }
+            s
+        };
+        let result: Vec<Scalar> = if work < PAR_MIN_WORK {
+            tgt.iter().map(compute).collect()
+        } else {
+            use rayon::prelude::*;
+            tgt.par_iter().map(compute).collect()
+        };
         Ok(result)
     }
 }
@@ -196,5 +213,44 @@ mod tests {
         )
         .unwrap();
         assert!((result[0] - 5.0).abs() < 10.0);
+    }
+
+    #[test]
+    fn test_parallel_idw_matches_serial_formula() {
+        // Large target set (200×1000 = 200_000 work) crosses the rayon
+        // threshold; the middle target must match the analytic IDW value.
+        let mut src = Vec::new();
+        for i in 0..10 {
+            for j in 0..10 {
+                src.push(Coord3D::new(i as Scalar, j as Scalar, 0.0));
+            }
+        }
+        let vals: Vec<Scalar> = (0..src.len()).map(|k| k as Scalar).collect();
+        let mut tgt = Vec::new();
+        for i in 0..400 {
+            for j in 0..5 {
+                tgt.push(Coord3D::new(i as Scalar * 0.1, j as Scalar * 0.1, 0.0));
+            }
+        }
+        // 400×5 = 2000 targets × 100 sources = 200_000 work ≥ PAR_MIN_WORK.
+        assert_eq!(tgt.len(), 2000);
+        assert!(tgt.len() * src.len() >= PAR_MIN_WORK);
+        let got = FieldMapper::inverse_distance_weighted(&src, &vals, &tgt, 2.0);
+        // Check an arbitrary target against the analytic formula.
+        let mid = 1400;
+        let tp = &tgt[mid];
+        let mut num = 0.0;
+        let mut den = 0.0;
+        for (sp, &v) in src.iter().zip(vals.iter()) {
+            let d = tp.distance(sp).max(1e-15);
+            let w = 1.0 / d.powi(2);
+            num += w * v;
+            den += w;
+        }
+        assert!((got[mid] - num / den).abs() < 1e-9, "parallel IDW mismatch");
+        // Every target must be finite.
+        for &v in &got {
+            assert!(v.is_finite());
+        }
     }
 }

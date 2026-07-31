@@ -173,6 +173,40 @@ Legend: ✅ implemented & tested | ⬜ not implemented
 - [x] Legacy host-pointer `cublasDgemm` rejected (removed from CUDA 12 headers, returns wrong results) → v2 device path used
 - [x] 4+3 tests → **1877 lib + 2 doc**
 
+## NEW — Other computations: eigen SIMD + field-mapping rayon [100% ✅ (2026-07-31)]
+- [x] `eigen.rs::subspace_eigen`: `project_matrix` (ψᵀ·A·ψ) → 2× `mat_mul`; `orthonormalize_m` (M·φ) + RHS → `mat_vec_mul`; reconstruction (ψ·V) → `mat_mul` (all SIMD; project_matrix now returns Result)
+- [x] `coupling/field_mapping.rs`: nearest/IDW/RBF target evaluation (O(m·n), independent per target) → rayon-parallel with `PAR_MIN_WORK=200_000` guard
+- [x] 1 test (parallel IDW vs analytic formula) → **1878 lib + 2 doc**
+
+## NEW — Full-project audit: 8 more hot loops accelerated [100% ✅ (2026-07-31)]
+- [x] molbio `forcefield::compute_forces` + `ewald` O(n²) pairwise LJ/Coulomb → rayon per-worker partial buffers (symmetric f[i]+=/f[j]+= race avoided); parallel-vs-serial tests
+- [x] fluid `navier_stokes_3d::solve_pressure_poisson` (500-iter serial Jacobi, inconsistent with file) → rayon per-k-plane Jacobi, max_by reduction
+- [x] thermal `conduction_3d` ADI x/y/z sweeps → parallel read-solve + serial scatter (independent lines); parallel steady-state test
+- [x] cellbio `growth::diffuse` explicit 7-point stencil → rayon per-x-plane (Jacobi semantics); parallel conservation test
+- [x] quantum `apply_kraus`/`sqrt` → `mat_mul_complex`; `propagator_step` → `mat_vec_mul_complex` (SIMD)
+- [x] acoustic `solve_complex_bem` → delegate `solve_complex` (removed ~60 lines duplicate)
+- [x] multibody `constraints` linear `find` (O(C×B)) → `body_indices` HashMap O(1) lookups (baumgarte + assembly + force apply)
+- [x] emag `radiation_pattern` + `rcs_3d` → rayon over observation directions
+- [x] fluid `compressible_ns::step` (convective x/y + viscous) → rayon per-row (was the only serial NS solver; now 2D/3D incompressible + 2D compressible all parallel)
+- [x] Explicitly skipped (analyzed, not worth): postproc visualization (one-shot/memory-bound), 2D Gauss-Seidel (in-place serial), LCP (non-routeable, small n), StateSpace A·x (n<50)
+- [x] 5 tests → **1883 lib + 2 doc**
+
+## NEW — BLUE1-12 full-project compute scan: 12 more hotspots accelerated [100% ✅ (2026-07-31)]
+- [x] analog `run_ac_sweep`/`run_dc_sweep` → rayon per sweep point (independent MNA solves)
+- [x] tcad `mosfet_iv_curve`/`bjt_iv_curve` → rayon per bias point
+- [x] astrophysics MHD `step()` flux sweeps → rayon per-row
+- [x] bio_medical `tissue_diffusion::step` → rayon per-row (+ non-negativity zip)
+- [x] structural `explicit_dynamics::step` → rayon per-DOF (3 passes)
+- [x] optical `trace_fan`+`defocus_spot` → rayon per-ray
+- [x] multibody `assemble_eom` → rayon per-body (removed unused `_id_map`)
+- [x] molbio docking `shape_score`/`electrostatic_score` → rayon per-ligand sum
+- [x] thermal `radiation_3d` reset + radiative-source passes → rayon
+- [x] postproc `optimize_grid` → rayon min-reduction over iterations
+- [x] acoustic `bem_acoustic::surface_pressure` G/H assembly → per-element partials + serial reduce; RHS per-row rayon
+- [x] acoustic `rectangular_room_modes` → rayon over mode space
+- [x] Skipped (honest analysis): lindblad (dim³<4096), cell_model division budget coupling, DOM direction sweep (upwind), 2D/1D Gauss-Seidel (in-place), digital timing (sequential longest path), ODE AXPY (f dominates), tiny 2×2 noise_channel
+- [x] 12 tests → **1898 lib + 2 doc**
+
 ## Engine Dataflow Fixes (2026-07-31 Session 2)
 - [x] `update_inputs` wired into `engine.step()` — propagated signals now actually reach block input ports (previously zero call sites → multi-block diagrams were inert)
 - [x] Continuous-state sync: `Block::read_state`/`write_state` + `collect_state_from_blocks`/`push_state_to_blocks` — integrated state now written back into blocks (Integrator/TransferFunction/StateSpace were frozen)
@@ -213,5 +247,5 @@ Legend: ✅ implemented & tested | ⬜ not implemented
 | NEW | FFT twiddle table + Blocked CGS2 QR | 100% ✅ |
 
 **Quality gates:** `cargo build` ✅ · `cargo clippy --all-targets -- -D warnings` zero ✅ ·
-`cargo test` 1877 lib + 2 doc-tests, 0 failed, 0 ignored ✅ · no `todo!()`/`unimplemented!()`/empty
+`cargo test` 1898 lib + 2 doc-tests, 0 failed, 0 ignored ✅ · no `todo!()`/`unimplemented!()`/empty
 stubs in production code ✅ · English comments ✅

@@ -184,43 +184,54 @@ impl CompressibleNS2D {
     }
 
     /// Perform one time step using Roe's scheme.
+    ///
+    /// Each flux update writes disjoint `Q_new` cells and only reads the
+    /// immutable `self.Q`, so every row is independent — the three sweeps run
+    /// on rayon (parallelized 2026-07-31 audit round).
     pub fn step(&mut self) -> Result<(), String> {
         let (nx, ny) = (self.nx, self.ny);
         let (dx, dy, dt) = (self.dx, self.dy, self.dt);
         let mut Q_new = self.Q.clone();
 
-        // Convective fluxes (x-direction)
-        for j in 0..ny {
+        // Convective fluxes (x-direction) — all rows independent.
+        use rayon::prelude::*;
+        Q_new.par_iter_mut().enumerate().for_each(|(j, row)| {
             for i in 1..nx - 1 {
                 let flux = self.roe_flux_x(&self.Q[j][i - 1], &self.Q[j][i + 1]);
                 for k in 0..4 {
-                    Q_new[j][i][k] -=
+                    row[i][k] -=
                         dt / dx * (flux[k] - self.flux_x(&self.primitive(&self.Q[j][i]))[k]);
                 }
             }
-        }
+        });
 
-        // Convective fluxes (y-direction)
-        for j in 1..ny - 1 {
+        // Convective fluxes (y-direction) — interior rows only.
+        Q_new.par_iter_mut().enumerate().for_each(|(j, row)| {
+            if j == 0 || j == ny - 1 {
+                return;
+            }
             for i in 0..nx {
                 let flux = self.roe_flux_x(&self.Q[j - 1][i], &self.Q[j + 1][i]);
                 for k in 0..4 {
-                    Q_new[j][i][k] -=
+                    row[i][k] -=
                         dt / dy * (flux[k] - self.flux_y(&self.primitive(&self.Q[j][i]))[k]);
                 }
             }
-        }
+        });
 
-        // Viscous fluxes (simplified)
+        // Viscous fluxes (simplified) — interior rows only.
         if self.mu > 0.0 {
-            for j in 1..ny - 1 {
+            Q_new.par_iter_mut().enumerate().for_each(|(j, row)| {
+                if j == 0 || j == ny - 1 {
+                    return;
+                }
                 for i in 1..nx - 1 {
                     let vf = self.viscous_flux_x(j, i);
                     for k in 0..4 {
-                        Q_new[j][i][k] += dt / (dx * dx) * vf[k];
+                        row[i][k] += dt / (dx * dx) * vf[k];
                     }
                 }
-            }
+            });
         }
 
         self.Q = Q_new;
@@ -303,5 +314,68 @@ mod tests {
         let ma = ns.mach_number();
         // M ≈ 340/340 = 1.0
         assert!((ma[3][3] - 1.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_compressible_step_parallel_matches_serial_reference() {
+        // Parallelized step() must reproduce the original serial loop order
+        // bit-for-bit (disjoint writes, same arithmetic per cell).
+        let mut ns = CompressibleNS2D::new(14, 14, 0.01, 0.01, 1e-6, 1.4, 0.72, 1.8e-5);
+        ns.set_freestream(1.225, 60.0, 10.0, 101325.0);
+        // Perturb to get non-trivial convective + viscous fluxes.
+        ns.Q[3][4][1] *= 1.05;
+        ns.Q[7][8][2] *= 1.1;
+        ns.Q[5][6][3] *= 1.02;
+
+        let (nx, ny) = (ns.nx, ns.ny);
+        let (dx, dy, dt) = (ns.dx, ns.dy, ns.dt);
+        let mut q_ref = ns.Q.clone();
+
+        // Serial reference: exact original loop order.
+        for j in 0..ny {
+            for i in 1..nx - 1 {
+                let flux = ns.roe_flux_x(&ns.Q[j][i - 1], &ns.Q[j][i + 1]);
+                for k in 0..4 {
+                    q_ref[j][i][k] -=
+                        dt / dx * (flux[k] - ns.flux_x(&ns.primitive(&ns.Q[j][i]))[k]);
+                }
+            }
+        }
+        for j in 1..ny - 1 {
+            for i in 0..nx {
+                let flux = ns.roe_flux_x(&ns.Q[j - 1][i], &ns.Q[j + 1][i]);
+                for k in 0..4 {
+                    q_ref[j][i][k] -=
+                        dt / dy * (flux[k] - ns.flux_y(&ns.primitive(&ns.Q[j][i]))[k]);
+                }
+            }
+        }
+        if ns.mu > 0.0 {
+            for j in 1..ny - 1 {
+                for i in 1..nx - 1 {
+                    let vf = ns.viscous_flux_x(j, i);
+                    for k in 0..4 {
+                        q_ref[j][i][k] += dt / (dx * dx) * vf[k];
+                    }
+                }
+            }
+        }
+
+        ns.step().unwrap();
+
+        for j in 0..ny {
+            for i in 0..nx {
+                for k in 0..4 {
+                    let diff = (ns.Q[j][i][k] - q_ref[j][i][k]).abs();
+                    let scale = ns.Q[j][i][k].abs().max(q_ref[j][i][k].abs()).max(1e-12);
+                    assert!(
+                        diff / scale < 1e-9,
+                        "mismatch at [{j}][{i}][{k}]: {} vs {}",
+                        ns.Q[j][i][k],
+                        q_ref[j][i][k]
+                    );
+                }
+            }
+        }
     }
 }
