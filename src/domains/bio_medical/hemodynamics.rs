@@ -103,21 +103,27 @@ impl HodgkinHuxley {
     }
 
     /// Gate rate equations. Returns (dm/dt, dn/dt, dh/dt).
+    ///
+    /// The gate kinetics use the *absolute* membrane potential
+    /// `V = v_rest + v` (the standard Hodgkin-Huxley offsets v+40, v+65, ...),
+    /// while `v` here is the deviation-from-rest voltage used by the ionic
+    /// current equations.
     pub fn gate_derivatives(&self, v: Scalar) -> (Scalar, Scalar, Scalar) {
-        let alpha_m = if (v + 40.0).abs() > 1e-10 {
-            0.1 * (v + 40.0) / (1.0 - (-(v + 40.0) / 10.0).exp())
+        let v_abs = self.v_rest + v;
+        let alpha_m = if (v_abs + 40.0).abs() > 1e-10 {
+            0.1 * (v_abs + 40.0) / (1.0 - (-(v_abs + 40.0) / 10.0).exp())
         } else {
             1.0
         };
-        let beta_m = 4.0 * (-(v + 65.0) / 18.0).exp();
-        let alpha_n = if (v + 55.0).abs() > 1e-10 {
-            0.01 * (v + 55.0) / (1.0 - (-(v + 55.0) / 10.0).exp())
+        let beta_m = 4.0 * (-(v_abs + 65.0) / 18.0).exp();
+        let alpha_n = if (v_abs + 55.0).abs() > 1e-10 {
+            0.01 * (v_abs + 55.0) / (1.0 - (-(v_abs + 55.0) / 10.0).exp())
         } else {
             0.1
         };
-        let beta_n = 0.125 * (-(v + 65.0) / 80.0).exp();
-        let alpha_h = 0.07 * (-(v + 65.0) / 20.0).exp();
-        let beta_h = 1.0 / (1.0 + (-(v + 35.0) / 10.0).exp());
+        let beta_n = 0.125 * (-(v_abs + 65.0) / 80.0).exp();
+        let alpha_h = 0.07 * (-(v_abs + 65.0) / 20.0).exp();
+        let beta_h = 1.0 / (1.0 + (-(v_abs + 35.0) / 10.0).exp());
 
         let dm = alpha_m * (1.0 - self.m) - beta_m * self.m;
         let dn = alpha_n * (1.0 - self.n) - beta_n * self.n;

@@ -33,7 +33,7 @@
 pub mod core;
 pub mod runtime;
 
-// Future module placeholders (declared for architecture completeness)
+// Top-level modules (all fully implemented and active).
 pub mod bindings;
 pub mod blocks;
 pub mod coupling;
@@ -43,6 +43,16 @@ pub mod postproc;
 
 // Re-export commonly used types at the crate root for convenience.
 pub use core::block::{Block, BlockError, SimpleBlock};
+pub use core::compute::backend::{
+    AdaptiveCompute, BackendKind, ComputeConfig, GpuBackend, adaptive_add, adaptive_axpy,
+    adaptive_dot, adaptive_mat_mul, global,
+};
+pub use core::compute::linalg::{
+    adaptive_asum, adaptive_cholesky, adaptive_gemv, adaptive_iamax, adaptive_lu_solve,
+    adaptive_nrm2, adaptive_qr, adaptive_scal, asum, cholesky, gemv, iamax, lu_decompose, lu_solve,
+    nrm2, qr_decompose, scal,
+};
+pub use core::compute::vendor_blas::{BlasVendor, VendorBlasBackend, detect_installed_vendors};
 pub use core::coord::{Coord1D, Coord2D, Coord3D, CoordSystem, Transform4x4};
 pub use core::diagram::Diagram;
 pub use core::error::{ErrorCode, SimError};

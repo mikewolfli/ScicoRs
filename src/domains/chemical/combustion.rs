@@ -27,18 +27,27 @@ pub fn adiabatic_flame_temperature(
 
 /// Laminar flame speed approximation (methane-air like).
 ///
-/// S_L = S_L0 · (T_u / T_u0)^1.5 · (P / P0)^(-0.3)
+/// S_L = S_L0 · (T_u / T_u0)^1.5 · (P / P0)^(-0.3) · f(φ)
 ///
-/// Simplified: S_L ≈ 0.4 · (T_unburned / 300)^1.5
+/// with `S_L0 ≈ 0.4 m/s`, `T_u0 = 300 K`, `P0 = 1 atm` and a parabolic
+/// equivalence-ratio factor peaking near φ ≈ 1.1.
 pub fn laminar_flame_speed(
     unburned_temp: Scalar,
-    _pressure: Scalar,
-    _equivalence_ratio: Scalar,
+    pressure: Scalar,
+    equivalence_ratio: Scalar,
 ) -> Scalar {
     if unburned_temp <= 0.0 {
         return 0.0;
     }
-    0.4 * (unburned_temp / 300.0).powf(1.5)
+    let t_factor = (unburned_temp / 300.0).powf(1.5);
+    // Pressure in atmospheres (P0 = 1 atm).
+    let p_factor = if pressure > 0.0 {
+        pressure.powf(-0.3)
+    } else {
+        1.0
+    };
+    let phi_factor = (1.0 - 2.0 * (equivalence_ratio - 1.1).powi(2)).max(0.1);
+    0.4 * t_factor * p_factor * phi_factor
 }
 
 /// Flammability (explosive) limits for common gases.
@@ -139,10 +148,16 @@ mod tests {
 
     #[test]
     fn test_laminar_flame_speed() {
+        // At 600 K, 1 atm, φ=1.0: S_L = 0.4·2^1.5·1·(1−2·(0.1)²) ≈ 1.1087.
         let s = laminar_flame_speed(600.0, 1.0, 1.0);
-        assert!(s > 0.0);
-        // At 600K, S_L ~ 0.4 * (600/300)^1.5 = 0.4 * 2^1.5 = 0.4 * 2.828 = 1.13
-        assert!((s - 0.4 * Scalar::powf(600.0 / 300.0, 1.5)).abs() < 1e-12);
+        let expected = 0.4 * Scalar::powf(600.0 / 300.0, 1.5) * (1.0 - 2.0 * 0.1 * 0.1);
+        assert!((s - expected).abs() < 1e-12);
+        // Increasing pressure reduces flame speed.
+        let s_high_p = laminar_flame_speed(600.0, 5.0, 1.0);
+        assert!(s_high_p < s);
+        // Away from the peak equivalence ratio the speed drops.
+        let s_lean = laminar_flame_speed(600.0, 1.0, 0.6);
+        assert!(s_lean < s);
     }
 
     #[test]

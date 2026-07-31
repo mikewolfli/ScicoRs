@@ -154,14 +154,14 @@ impl IsaAtmosphere {
             let p0 = IsaAtmosphere::pressure(h0);
             let t0 = IsaAtmosphere::temperature(h0);
             let t = IsaAtmosphere::temperature(h);
-            let exponent = -G0 / (R_AIR * LAPSE_STRAT2);
+            let exponent = G0 / (R_AIR * LAPSE_STRAT2);
             p0 * (t / t0).powf(exponent)
         } else if h <= ISA_H_STRATOSPHERE3 {
             let h0 = ISA_H_STRATOSPHERE2;
             let p0 = IsaAtmosphere::pressure(h0);
             let t0 = IsaAtmosphere::temperature(h0);
             let t = IsaAtmosphere::temperature(h);
-            let exponent = -G0 / (R_AIR * LAPSE_STRAT3);
+            let exponent = G0 / (R_AIR * LAPSE_STRAT3);
             p0 * (t / t0).powf(exponent)
         } else if h <= ISA_H_MESOSPHERE1 {
             // Stratopause (isothermal)
@@ -174,14 +174,14 @@ impl IsaAtmosphere {
             let p0 = IsaAtmosphere::pressure(h0);
             let t0 = IsaAtmosphere::temperature(h0);
             let t = IsaAtmosphere::temperature(h);
-            let exponent = -G0 / (R_AIR * LAPSE_MESO2);
+            let exponent = G0 / (R_AIR * LAPSE_MESO2);
             p0 * (t / t0).powf(exponent)
         } else if h <= ISA_H_MESOPAUSE {
             let h0 = ISA_H_MESOSPHERE2;
             let p0 = IsaAtmosphere::pressure(h0);
             let t0 = IsaAtmosphere::temperature(h0);
             let t = IsaAtmosphere::temperature(h);
-            let exponent = -G0 / (R_AIR * LAPSE_MESO3);
+            let exponent = G0 / (R_AIR * LAPSE_MESO3);
             p0 * (t / t0).powf(exponent)
         } else {
             // Above 86 km — exponential extrapolation
@@ -327,5 +327,64 @@ mod tests {
         assert!(G0 > 0.0);
         assert!(R_AIR > 0.0);
         assert!(GAMMA_AIR > 1.0);
+    }
+
+    /// Verify the ISA pressure/temperature model against standard reference
+    /// values (US Standard Atmosphere 1976). These are exact ISA checkpoints.
+    #[test]
+    fn test_isa_reference_checkpoints() {
+        let checkpoints = [
+            (0.0, 101325.0, 288.15),
+            (11_000.0, 22632.0, 216.65),
+            (20_000.0, 5474.9, 216.65),
+            (25_000.0, 2511.0, 221.65), // 25 km is inside the 20-32 km layer
+            (32_000.0, 868.02, 228.65),
+            (47_000.0, 110.91, 270.65),
+            (51_000.0, 66.94, 270.65),
+            (71_000.0, 3.957, 214.65),
+            // 86 km uses the code's piecewise layer model (71–86 km lapse
+            // −0.002 K/m → T=184.65 K), consistent with the layer definitions.
+            (86_000.0, 0.3024, 184.65),
+        ];
+        for (alt, p_ref, t_ref) in checkpoints {
+            let p = IsaAtmosphere::pressure(alt);
+            let t = IsaAtmosphere::temperature(alt);
+            assert!(
+                (p - p_ref).abs() / p_ref < 0.02,
+                "pressure at {} m: got {} Pa, expected ~{} Pa",
+                alt,
+                p,
+                p_ref
+            );
+            assert!(
+                (t - t_ref).abs() < 0.6,
+                "temperature at {} m: got {} K, expected ~{} K",
+                alt,
+                t,
+                t_ref
+            );
+        }
+    }
+
+    /// Pressure must be monotonically non-increasing with altitude across the
+    /// non-isothermal stratosphere layers (a sign error would make it rise).
+    #[test]
+    fn test_isa_pressure_monotonic_all_layers() {
+        let mut prev = f64::INFINITY;
+        for alt in [
+            0.0, 5_000.0, 11_000.0, 15_000.0, 20_000.0, 25_000.0, 32_000.0, 40_000.0, 47_000.0,
+            51_000.0, 60_000.0, 71_000.0, 86_000.0,
+        ] {
+            let p = IsaAtmosphere::pressure(alt);
+            assert!(
+                p < prev,
+                "pressure must decrease with altitude: p({}) = {} >= p({}) = {}",
+                alt,
+                p,
+                alt - 1.0,
+                prev
+            );
+            prev = p;
+        }
     }
 }

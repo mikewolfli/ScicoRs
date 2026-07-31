@@ -85,8 +85,8 @@ impl Block for PcbThermalBlock {
         let power = self.ports.get("power_in").and_then(|p| p.read()).and_then(|s| {
             if let SignalValue::Scalar(v) = &s.value { Some(*v) } else { None }
         }).unwrap_or(0.0);
-        let ambient = 25.0;
-        let theta_ja = 20.0;
+        let ambient = self.params.get_scalar("ambient_temp").unwrap_or(25.0);
+        let theta_ja = self.params.get_scalar("theta_ja").unwrap_or(20.0);
         let temp = ambient + theta_ja * power;
         if let Some(p) = self.ports.get_mut("temp_out") {
             p.write(Signal::new(SignalType::Continuous, SignalValue::Scalar(temp), self.time));

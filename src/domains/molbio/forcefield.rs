@@ -388,8 +388,26 @@ impl ForceField {
         let n = coords.len();
         let mut forces = vec![Vec3::zero(); n];
 
+        // Pre-index LJ parameters and charges for O(1) per-pair lookups,
+        // avoiding an O(n) `find` inside the inner loops (O(n³) → O(n²)).
+        let mut lj_by_id: Vec<Option<LennardJones>> = vec![None; n];
+        for &(idx, p) in &self.lj_params {
+            if idx < n {
+                lj_by_id[idx] = Some(p);
+            }
+        }
+        let mut charge_by_id: Vec<Scalar> = vec![0.0; n];
+        for &(idx, q) in &self.charges {
+            if idx < n {
+                charge_by_id[idx] = q;
+            }
+        }
+
         // Bond forces
         for &(i, j, ref bond) in &self.bonds {
+            if i >= n || j >= n {
+                continue;
+            }
             let rij = coords[j].subtract(&coords[i]);
             let r = rij.norm();
             if r < 1e-15 {
@@ -404,20 +422,19 @@ impl ForceField {
         // Lennard-Jones forces (pairwise)
         let excluded = build_exclusion_list(&self.bonds, &self.angles, n);
         for i in 0..n {
-            let lj_i = self.lj_params.iter().find(|(idx, _)| *idx == i).map(|(_, p)| *p);
-            if lj_i.is_none() {
-                continue;
-            }
-            let lj_i = lj_i.unwrap();
+            let lj_i = match lj_by_id[i] {
+                Some(p) => p,
+                None => continue,
+            };
             for j in (i + 1)..n {
                 if excluded[i].contains(&j) {
                     continue;
                 }
-                let lj_j = self.lj_params.iter().find(|(idx, _)| *idx == j).map(|(_, p)| *p);
-                if lj_j.is_none() {
-                    continue;
-                }
-                let lj_ij = lj_i.combine_lorentz_berthelot(&lj_j.unwrap());
+                let lj_j = match lj_by_id[j] {
+                    Some(p) => p,
+                    None => continue,
+                };
+                let lj_ij = lj_i.combine_lorentz_berthelot(&lj_j);
                 let rij = coords[j].subtract(&coords[i]);
                 let r = rij.norm();
                 if r < 1e-15 {
@@ -432,20 +449,18 @@ impl ForceField {
 
         // Coulomb forces (pairwise)
         for i in 0..n {
-            let qi = self.charges.iter().find(|(idx, _)| *idx == i).map(|(_, q)| *q);
-            if qi.is_none() || qi.unwrap().abs() < 1e-10 {
+            let qi = charge_by_id[i];
+            if qi.abs() < 1e-10 {
                 continue;
             }
-            let qi = qi.unwrap();
             for j in (i + 1)..n {
                 if excluded[i].contains(&j) {
                     continue;
                 }
-                let qj = self.charges.iter().find(|(idx, _)| *idx == j).map(|(_, q)| *q);
-                if qj.is_none() || qj.unwrap().abs() < 1e-10 {
+                let qj = charge_by_id[j];
+                if qj.abs() < 1e-10 {
                     continue;
                 }
-                let qj = qj.unwrap();
                 let rij = coords[j].subtract(&coords[i]);
                 let r = rij.norm();
                 if r < 1e-15 {

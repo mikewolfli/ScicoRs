@@ -3,9 +3,18 @@
 use crate::core::types::Scalar;
 use super::devices::PowerMosfet;
 
-/// PWM signal: compares control voltage with triangle carrier.
-pub fn pwm_signal(control_voltage: Scalar, carrier_amplitude: Scalar, _carrier_freq: Scalar, time: Scalar) -> Scalar {
-    let carrier = carrier_amplitude * (2.0 * std::f64::consts::PI * time).sin();
+/// PWM signal: compares control voltage with a triangle carrier at the
+/// requested carrier frequency.
+pub fn pwm_signal(control_voltage: Scalar, carrier_amplitude: Scalar, carrier_freq: Scalar, time: Scalar) -> Scalar {
+    // Triangle wave with period 1/carrier_freq, amplitude carrier_amplitude,
+    // centered on 0 (range [-amplitude, +amplitude]).
+    let phase = if carrier_freq > 0.0 {
+        (time * carrier_freq).fract()
+    } else {
+        0.0
+    };
+    let tri = 4.0 * (phase - 0.5).abs() - 1.0;
+    let carrier = carrier_amplitude * tri;
     if control_voltage > carrier { 1.0 } else { 0.0 }
 }
 

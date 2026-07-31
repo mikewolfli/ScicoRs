@@ -16,9 +16,17 @@ impl CardiacModel {
     }
     pub fn step(&mut self, i_stim: Scalar, dt: Scalar) {
         self.v += dt * (0.1 * i_stim - 0.01 * (self.v + 70.0));
+        // Calcium transient is driven by stimulation / depolarization and
+        // decays with a time constant; it does not ramp unconditionally.
+        let drive = i_stim.max(0.0) * 0.1 + (self.v + 70.0).max(0.0) * 0.002;
         for ca in self.ca_transient.iter_mut() {
-            *ca = (*ca + dt * 0.1).min(1.0);
+            *ca = (*ca + dt * (drive - 0.5 * *ca)).clamp(0.0, 1.0);
         }
+        // Contractility tracks the mean calcium level, linking the electrical
+        // and mechanical sides of the model.
+        let mean_ca: Scalar = self.ca_transient.iter().sum::<Scalar>()
+            / self.ca_transient.len().max(1) as Scalar;
+        self.contractility = 0.5 + 0.5 * mean_ca;
     }
     pub fn frank_starling(volume: Scalar, contractility: Scalar) -> Scalar {
         contractility * (0.5 + 0.5 * (-((volume - 100.0) / 30.0).powi(2)).exp()).max(0.0)

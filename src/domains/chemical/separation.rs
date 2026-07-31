@@ -9,7 +9,7 @@ use crate::core::types::Scalar;
 /// Fenske equation for minimum number of theoretical stages in distillation.
 ///
 /// N_min = ln[(x_D/(1-x_D))·((1-x_B)/x_B)] / ln(α)
-pub fn fenske_equation(_n: Scalar, alpha: Scalar, x_d: Scalar, x_b: Scalar) -> Scalar {
+pub fn fenske_equation(alpha: Scalar, x_d: Scalar, x_b: Scalar) -> Scalar {
     if alpha <= 0.0 || alpha == 1.0 || x_d <= 0.0 || x_d >= 1.0 || x_b <= 0.0 || x_b >= 1.0 {
         return f64::NAN;
     }
@@ -18,19 +18,27 @@ pub fn fenske_equation(_n: Scalar, alpha: Scalar, x_d: Scalar, x_b: Scalar) -> S
 
 /// Minimum reflux ratio for binary distillation (Underwood method approximation).
 ///
-/// R_min = (1/(α-1))·(x_D/x_F - α·(1-x_D)/(1-x_F))
+/// The pinch composition is found from the intersection of the q-line
+/// `y = q/(q−1)·x − x_F/(q−1)` with the relative-volatility equilibrium curve
+/// `y = αx/(1+(α−1)x)`, then `R_min = (1/(α−1))·(x_D/x_p − α(1−x_D)/(1−x_p))`.
 pub fn minimum_reflux_ratio(alpha: Scalar, x_f: Scalar, x_d: Scalar, q: Scalar) -> Scalar {
     if alpha <= 0.0 || alpha == 1.0 || x_f <= 0.0 || x_f >= 1.0 || x_d <= 0.0 || x_d >= 1.0 {
         return f64::NAN;
     }
-    let pinched = if q <= 1.0 {
-        // Use feed composition for pinched region
-        x_f
+    // Quadratic for the pinch composition (q-line ∩ equilibrium curve):
+    //   q(α−1)·x² + [q − x_F(α−1) − α(q−1)]·x − x_F = 0
+    let a = q * (alpha - 1.0);
+    let b = q - x_f * (alpha - 1.0) - alpha * (q - 1.0);
+    let c = -x_f;
+    let disc = (b * b - 4.0 * a * c).max(0.0);
+    let x_pinch = if a.abs() < 1e-15 {
+        // q=0 (saturated vapour): x = -c/b
+        -c / b
     } else {
-        // For subcooled feed, adjust
-        x_f
+        (-b + disc.sqrt()) / (2.0 * a)
     };
-    (1.0 / (alpha - 1.0)) * (x_d / pinched - alpha * (1.0 - x_d) / (1.0 - pinched))
+    let x_pinch = x_pinch.clamp(1e-9, 1.0 - 1e-9);
+    (1.0 / (alpha - 1.0)) * (x_d / x_pinch - alpha * (1.0 - x_d) / (1.0 - x_pinch))
 }
 
 /// Absorption factor for gas absorption columns.
@@ -150,14 +158,14 @@ mod tests {
     #[test]
     fn test_fenske_equation() {
         // α=2.5, x_D=0.95, x_B=0.05
-        let n = fenske_equation(0.0, 2.5, 0.95, 0.05);
+        let n = fenske_equation(2.5, 0.95, 0.05);
         assert!(n > 0.0);
         assert!(n < 10.0);
     }
 
     #[test]
     fn test_fenske_invalid_alpha() {
-        assert!(fenske_equation(0.0, 1.0, 0.95, 0.05).is_nan());
+        assert!(fenske_equation(1.0, 0.95, 0.05).is_nan());
     }
 
     #[test]

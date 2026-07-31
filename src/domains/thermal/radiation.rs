@@ -70,12 +70,16 @@ pub fn view_factor_perpendicular_rectangles(l: Scalar, w: Scalar, h: Scalar) -> 
     let term2 = h_ratio * (1.0 / h_ratio).atan();
     let term3 = wh_sq.sqrt() * (1.0 / wh_sq.sqrt()).atan();
 
+    // Full Incropera (Table 13.1) logarithm with the W² and H² power terms:
+    //   ln{ A · [B]^(W²) · [C]^(H²) }
     let w2 = w_ratio * w_ratio;
     let h2 = h_ratio * h_ratio;
-    let num = (1.0 + w2) * (1.0 + h2);
-    let denom = 1.0 + w2 + h2;
-    let log_arg = if denom <= 0.0 { 1.0 } else { num / denom };
-    let ln_part = 0.25 * log_arg.ln();
+    let sum = 1.0 + w2 + h2;
+    let a = ((1.0 + w2) * (1.0 + h2)) / sum;
+    let b = (w2 * sum) / ((1.0 + w2) * (w2 + h2));
+    let c = (h2 * sum) / ((1.0 + h2) * (w2 + h2));
+    let log_arg = a * b.powf(w2) * c.powf(h2);
+    let ln_part = if log_arg > 0.0 { 0.25 * log_arg.ln() } else { 0.0 };
 
     let result = (term1 + term2 - term3 + ln_part) / (std::f64::consts::PI * w_ratio);
     result.max(0.0)

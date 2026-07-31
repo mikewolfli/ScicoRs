@@ -347,6 +347,17 @@ impl Block for ALUBlock {
     }
 
     fn output(&mut self) -> Result<(), SimError> {
+        if self.width == 0 {
+            // Degenerate zero-bit ALU: output zero.
+            if let Some(port) = self.ports.get_mut("result") {
+                port.write(Signal::new(
+                    SignalType::Discrete,
+                    SignalValue::Scalar(0.0),
+                    self.current_time,
+                ));
+            }
+            return Ok(());
+        }
         let a_val = self.ports.get("a").and_then(|p| p.read()).and_then(|s| s.as_scalar()).unwrap_or(0.0) as u64;
         let b_val = self.ports.get("b").and_then(|p| p.read()).and_then(|s| s.as_scalar()).unwrap_or(0.0) as u64;
         let op_val = self.ports.get("opcode").and_then(|p| p.read()).and_then(|s| s.as_scalar()).unwrap_or(0.0) as u64;

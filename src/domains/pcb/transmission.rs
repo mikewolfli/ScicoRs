@@ -106,17 +106,15 @@ impl TransmissionLine {
         (zin - z0c) / (zin + z0c)
     }
 
-    /// S21 transmission coefficient.
+    /// S21 transmission coefficient: S21 = e^(−αL)·e^(−jβL).
+    ///
+    /// `attenuation` is in dB per unit length; `length` in the same units.
     pub fn s21(&self, freq: Scalar, _z0: Scalar) -> Complex<Scalar> {
-        let gamma = self.attenuation / 8.686 * self.length; // Nepers
-        let _beta = 2.0 * std::f64::consts::PI * freq * f64::sqrt(self.er) / 2.99792458e8;
-        let k = if self.attenuation > 0.0 {
-            10.0_f64.powf(-self.attenuation * self.length / 20.0)
-        } else {
-            1.0
-        };
-        Complex::new(k * (-gamma * self.length).cos(), 0.0)
-            - Complex::new(0.0, k * (-gamma * self.length).sin())
+        let beta = 2.0 * std::f64::consts::PI * freq * f64::sqrt(self.er) / 2.99792458e8;
+        let alpha = self.attenuation / 8.686; // dB/unit → Nepers/unit
+        let magnitude = (-alpha * self.length).exp();
+        let phase = -beta * self.length;
+        Complex::from_polar(magnitude, phase)
     }
 }
 

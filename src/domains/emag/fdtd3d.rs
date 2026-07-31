@@ -506,12 +506,22 @@ impl Fdtd3D {
                 } => {
                     let val = waveform.value(t);
                     let k = *start_plane;
+                    // Staggered Yee grid: ez and ey have different row counts
+                    // per plane, so write each with its own bounds.
                     if k < self.ez.len() {
-                        let ny1 = self.ez[0].len();
-                        let nx1 = self.ez[0][0].len();
-                        for i in 0..ny1 {
-                            for j in 0..nx1 {
+                        let ny_ez = self.ez[k].len();
+                        let nx_ez = self.ez[k][0].len();
+                        for i in 0..ny_ez {
+                            for j in 0..nx_ez {
                                 self.ez[k][i][j] += val * polarization.z;
+                            }
+                        }
+                    }
+                    if k < self.ey.len() {
+                        let ny_ey = self.ey[k].len();
+                        let nx_ey = self.ey[k][0].len();
+                        for i in 0..ny_ey {
+                            for j in 0..nx_ey {
                                 self.ey[k][i][j] += val * polarization.y;
                             }
                         }

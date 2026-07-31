@@ -6,12 +6,11 @@
 use crate::core::types::Scalar;
 
 /// Solar mass (kg).
-const M_SUN: Scalar = 1.989e30;
-#[allow(dead_code)]
+pub const M_SUN: Scalar = 1.989e30;
 /// Solar radius (m).
-const R_SUN: Scalar = 6.9634e8;
+pub const R_SUN: Scalar = 6.9634e8;
 /// Solar luminosity (W).
-const L_SUN: Scalar = 3.828e26;
+pub const L_SUN: Scalar = 3.828e26;
 
 /// Stellar structure model with polytropic and main-sequence analysis.
 #[derive(Debug, Clone)]

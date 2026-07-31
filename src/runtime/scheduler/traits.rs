@@ -54,6 +54,9 @@ pub trait Scheduler: Send + Sync {
     /// Get the current topological execution order.
     fn execution_order(&self) -> &[BlockId];
 
+    /// Get a reference to the signal cache.
+    fn signal_cache(&self) -> &SignalCache;
+
     /// Get a mutable reference to the scheduler's signal cache.
     ///
     /// Used by the engine to write block output values before propagation.
@@ -101,16 +104,6 @@ impl SequentialScheduler {
             signal_cache: SignalCache::new(),
             event_queue: EventQueue::new(),
         }
-    }
-
-    /// Get a reference to the signal cache.
-    pub fn signal_cache(&self) -> &SignalCache {
-        &self.signal_cache
-    }
-
-    /// Get a mutable reference to the signal cache.
-    pub fn signal_cache_mut(&mut self) -> &mut SignalCache {
-        &mut self.signal_cache
     }
 
     /// Get a reference to the event queue.
@@ -177,6 +170,10 @@ impl Scheduler for SequentialScheduler {
 
     fn execution_order(&self) -> &[BlockId] {
         &self.order
+    }
+
+    fn signal_cache(&self) -> &SignalCache {
+        &self.signal_cache
     }
 
     fn signal_cache_mut(&mut self) -> &mut SignalCache {

@@ -43,6 +43,8 @@ impl JonesMatrix {
     }
 
     /// Quarter-wave plate with fast axis at angle `θ` (radians).
+    ///
+    /// Jones matrix: [[c²+is², cs(1−i)], [cs(1−i), s²+ic²]]
     pub fn quarter_wave_plate(fast_axis: Scalar) -> Self {
         let c = fast_axis.cos();
         let s = fast_axis.sin();
@@ -51,14 +53,8 @@ impl JonesMatrix {
         let cs = c * s;
         Self {
             data: [
-                [
-                    CS::new(c2 + s2 * CS::new(0.0, 1.0).re, 0.0),
-                    CS::new(cs - cs * CS::new(0.0, 1.0).re, 0.0),
-                ],
-                [
-                    CS::new(cs - cs * CS::new(0.0, 1.0).re, 0.0),
-                    CS::new(s2 + c2 * CS::new(0.0, 1.0).re, 0.0),
-                ],
+                [CS::new(c2, s2), CS::new(cs, -cs)],
+                [CS::new(cs, -cs), CS::new(s2, c2)],
             ],
         }
     }
@@ -144,24 +140,19 @@ impl MuellerMatrix {
     pub fn from_jones(j: &JonesMatrix) -> Self {
         let mut m = [[0.0; 4]; 4];
         // Jones → Mueller conversion
-        let jj = [
-            [j.data[0][0], j.data[0][1]],
-            [j.data[1][0], j.data[1][1]],
-        ];
+        let jj = [[j.data[0][0], j.data[0][1]], [j.data[1][0], j.data[1][1]]];
         let t0 = jj[0][0] * jj[0][0].conj()
             + jj[0][1] * jj[0][1].conj()
             + jj[1][0] * jj[1][0].conj()
             + jj[1][1] * jj[1][1].conj();
-        let t1 = jj[0][0] * jj[0][0].conj()
-            + jj[0][1] * jj[0][1].conj()
+        let t1 = jj[0][0] * jj[0][0].conj() + jj[0][1] * jj[0][1].conj()
             - jj[1][0] * jj[1][0].conj()
             - jj[1][1] * jj[1][1].conj();
         let t2 = jj[0][0] * jj[0][1].conj()
             + jj[0][1] * jj[0][0].conj()
             + jj[1][0] * jj[1][1].conj()
             + jj[1][1] * jj[1][0].conj();
-        let t3 = (jj[0][0] * jj[0][1].conj()
-            - jj[0][1] * jj[0][0].conj()
+        let t3 = (jj[0][0] * jj[0][1].conj() - jj[0][1] * jj[0][0].conj()
             + jj[1][0] * jj[1][1].conj()
             - jj[1][1] * jj[1][0].conj())
             * CS::new(0.0, 1.0);
@@ -170,18 +161,14 @@ impl MuellerMatrix {
         m[0][2] = t2.re * 0.5;
         m[0][3] = t3.re * 0.5;
         // ... simplified: additional rows for full conversion
-        m[1][0] = (jj[0][0] * jj[0][0].conj()
-            - jj[0][1] * jj[0][1].conj()
+        m[1][0] = (jj[0][0] * jj[0][0].conj() - jj[0][1] * jj[0][1].conj()
             + jj[1][0] * jj[1][0].conj()
             - jj[1][1] * jj[1][1].conj())
-            .re
-            * 0.5;
-        m[1][1] = (jj[0][0] * jj[0][0].conj()
-            - jj[0][1] * jj[0][1].conj()
-            - jj[1][0] * jj[1][0].conj()
-            + jj[1][1] * jj[1][1].conj())
-            .re
-            * 0.5;
+        .re * 0.5;
+        m[1][1] =
+            (jj[0][0] * jj[0][0].conj() - jj[0][1] * jj[0][1].conj() - jj[1][0] * jj[1][0].conj()
+                + jj[1][1] * jj[1][1].conj())
+            .re * 0.5;
         Self { data: m }
     }
 

@@ -129,9 +129,13 @@ impl LogicalQubit {
                         alpha * zero_amp.amplitudes[i] + beta * one_amp.amplitudes[i];
                 }
             }
-            QuantumCode::SurfaceCode { .. } => {
+            QuantumCode::SurfaceCode { d } => {
+                // Repetition-style encoding over the d² physical qubits:
+                // |0_L⟩ = |0...0⟩, |1_L⟩ = |1...1⟩. A full topological
+                // surface-code encoding is out of scope.
+                let n = d * d;
                 logical.amplitudes[0] = alpha;
-                logical.amplitudes[1 << (self.n_physical - 1)] = beta;
+                logical.amplitudes[(1 << n) - 1] = beta;
             }
         }
         Ok(logical)
@@ -202,12 +206,16 @@ impl LogicalQubit {
                 syndrome
             }
             QuantumCode::Steane7 => {
-                // 6 stabilizers for Steane code
+                // [[7,1,3]] Steane code. Six stabilizers:
+                //  - bits 0..3: Z-type checks (Z-parity over qubit sets),
+                //    detecting single-qubit X errors;
+                //  - bits 3..6: X-type checks (measured via the overlap
+                //    Re(⟨ψ|S|ψ⟩)), detecting single-qubit Z errors.
                 let mut syndrome = vec![0; 6];
-                // X-type stabilizers (rows of Hamming code parity check)
-                let x_stabs: [usize; 3] = [0b0001111, 0b0110011, 0b1010101];
+                // Z-checks are measured in the direct bit convention (bit p =
+                // qubit p), matching the codeword representation.
                 let z_stabs: [usize; 3] = [0b0001111, 0b0110011, 0b1010101];
-                for (si, &stab) in x_stabs.iter().enumerate() {
+                for (si, &stab) in z_stabs.iter().enumerate() {
                     for i in 0..self.amplitudes.len() {
                         if self.amplitudes[i].norm_sqr() > 1e-15 {
                             let parity = (i & stab).count_ones() % 2;
@@ -215,17 +223,65 @@ impl LogicalQubit {
                         }
                     }
                 }
-                for (si, &stab) in z_stabs.iter().enumerate() {
+                // X-type stabilizers: qubit sets whose bit_pos masks are the
+                // valid code-preserving patterns {0,1,2,3},{0,1,4,5},{0,2,4,6}
+                // (i.e. masks 0b0001111, 0b0110011, 0b1010101 in the bit_pos
+                // convention). These detect single-qubit Z errors.
+                let x_groups: [&[usize]; 3] = [&[6, 5, 4, 3], &[6, 5, 2, 1], &[6, 4, 2, 0]];
+                for (si, &group) in x_groups.iter().enumerate() {
+                    syndrome[3 + si] = self.x_stabilizer_bit(group);
+                }
+                syndrome
+            }
+            QuantumCode::Shor9 => {
+                // 8 stabilizer generators of the [[9,1,3]] Shor code:
+                //   6 Z-stabilizers inside each 3-qubit block (bit-flip detection),
+                //   2 X-stabilizers between blocks (phase-flip detection).
+                let mut syndrome = vec![0; 8];
+                // Z-type: parity of the two physical qubits (0 = same, 1 = differ).
+                let z_pairs: [(usize, usize); 6] = [(0, 1), (1, 2), (3, 4), (4, 5), (6, 7), (7, 8)];
+                for (si, &(qa, qb)) in z_pairs.iter().enumerate() {
+                    let pa = self.bit_pos(qa);
+                    let pb = self.bit_pos(qb);
                     for i in 0..self.amplitudes.len() {
                         if self.amplitudes[i].norm_sqr() > 1e-15 {
-                            let parity = (i & stab).count_ones() % 2;
-                            syndrome[3 + si] |= parity as usize;
+                            let ba = (i >> pa) & 1;
+                            let bb = (i >> pb) & 1;
+                            if ba != bb {
+                                syndrome[si] = 1;
+                                break;
+                            }
+                        }
+                    }
+                }
+                // X-type: measured via the overlap <ψ|S|ψ> (eigenvalue ±1).
+                syndrome[6] = self.x_stabilizer_bit(&[0, 1, 2, 3, 4, 5]);
+                syndrome[7] = self.x_stabilizer_bit(&[3, 4, 5, 6, 7, 8]);
+                syndrome
+            }
+            QuantumCode::SurfaceCode { d } => {
+                // Simplified repetition decoder over the d² physical qubits
+                // (consistent with `encode`). A full topological surface-code
+                // decoder is out of scope; this detects a single bit-flip on
+                // any physical qubit via Z-parity checks between neighbours.
+                let n = d * d;
+                let mut syndrome = vec![0; n.saturating_sub(1)];
+                for (si, qa) in (0..n.saturating_sub(1)).enumerate() {
+                    let pa = self.bit_pos(qa);
+                    let pb = self.bit_pos(qa + 1);
+                    for i in 0..self.amplitudes.len() {
+                        if self.amplitudes[i].norm_sqr() > 1e-15 {
+                            let ba = (i >> pa) & 1;
+                            let bb = (i >> pb) & 1;
+                            if ba != bb {
+                                syndrome[si] = 1;
+                                break;
+                            }
                         }
                     }
                 }
                 syndrome
             }
-            _ => vec![0; self.n_physical], // Placeholder for other codes
         }
     }
 
@@ -246,31 +302,178 @@ impl LogicalQubit {
                     } else {
                         return Ok(()); // No error
                     };
-                    // Apply X correction: flip the erroneous qubit
-                    let bit_pos = 2 - error_pos;
-                    for i in 0..self.amplitudes.len() {
-                        if self.amplitudes[i].norm_sqr() < 1e-15 {
-                            continue;
-                        }
-                        let bit = (i >> bit_pos) & 1;
-                        let corrected = if bit == 0 {
-                            i | (1 << bit_pos) // 0→1: set bit
-                        } else {
-                            i & !(1 << bit_pos) // 1→0: clear bit
-                        };
-                        if corrected < self.amplitudes.len() && corrected != i {
-                            let tmp = self.amplitudes[i];
-                            self.amplitudes[i] = ComplexScalar::new(0.0, 0.0);
-                            self.amplitudes[corrected] = tmp;
-                        }
-                    }
+                    self.apply_x(error_pos);
                 }
             }
-            _ => {
-                return Err("Correction not implemented for this code".to_string());
+            QuantumCode::Shor9 => {
+                self.correct_shor9(syndrome)?;
+            }
+            QuantumCode::Steane7 => {
+                if syndrome.len() < 6 {
+                    return Err("Steane: expected 6 syndrome bits".to_string());
+                }
+                // Bits 0..3 are Z-checks over the qubit sets
+                // {0,1,2,3},{0,1,4,5},{0,2,4,6} measured in the *direct* bit
+                // convention, while apply_x flips bit (6−q). The resulting
+                // syndrome→qubit map for X errors is:
+                //   {1→3, 2→1, 3→5, 4→0, 5→4, 6→2, 7→6}.
+                let decode_x = |sy: &[usize]| -> Result<Option<usize>, String> {
+                    let v = sy[0] + 2 * sy[1] + 4 * sy[2];
+                    Ok(match v {
+                        0 => None,
+                        1 => Some(3),
+                        2 => Some(1),
+                        3 => Some(5),
+                        4 => Some(0),
+                        5 => Some(4),
+                        6 => Some(2),
+                        7 => Some(6),
+                        _ => return Err("Steane: invalid X-syndrome bits".to_string()),
+                    })
+                };
+                // Bits 3..6 are X-checks on the qubit sets
+                // {6,5,4,3},{6,5,2,1},{6,4,2,0} (measured via the overlap
+                // method in the bit_pos convention); a Z error on qubit p
+                // anticommutes with the X-stabilizer containing p, giving the
+                // same mapping as decode_x: {1→3, 2→1, 3→5, 4→0, 5→4, 6→2, 7→6}.
+                let decode_z = |sy: &[usize]| -> Result<Option<usize>, String> {
+                    let v = sy[0] + 2 * sy[1] + 4 * sy[2];
+                    Ok(match v {
+                        0 => None,
+                        1 => Some(3),
+                        2 => Some(1),
+                        3 => Some(5),
+                        4 => Some(0),
+                        5 => Some(4),
+                        6 => Some(2),
+                        7 => Some(6),
+                        _ => return Err("Steane: invalid Z-syndrome bits".to_string()),
+                    })
+                };
+                if let Some(p) = decode_x(&syndrome[0..3])? {
+                    self.apply_x(p);
+                }
+                if let Some(p) = decode_z(&syndrome[3..6])? {
+                    self.apply_z(p);
+                }
+            }
+            QuantumCode::SurfaceCode { d } => {
+                let n = d * d;
+                // Repetition decoder: for a single bit-flip X_p the syndrome
+                // has 1s at indices (p-1, p) (or just s0 for p=0, or s_{n-2}
+                // for p=n-1). Decode via the first 1 position.
+                if syndrome.len() != n.saturating_sub(1) {
+                    return Err("surface code: syndrome length mismatch".to_string());
+                }
+                match syndrome.iter().position(|&s| s == 1) {
+                    None => { /* no error */ }
+                    Some(0) => {
+                        let run = syndrome.iter().take_while(|&&s| s == 1).count();
+                        self.apply_x(run - 1);
+                    }
+                    Some(i) => self.apply_x(i + 1),
+                }
             }
         }
         self.syndrome = syndrome.to_vec();
+        Ok(())
+    }
+
+    /// Apply a bit-flip (Pauli X) on physical qubit `q`.
+    fn apply_x(&mut self, q: usize) {
+        let pos = self.bit_pos(q);
+        let n = self.amplitudes.len();
+        let mut new_amps = self.amplitudes.clone();
+        // X_q is an involution: swap amplitude pairs (i, i ^ (1<<pos)).
+        for i in 0..n {
+            let flipped = i ^ (1 << pos);
+            if flipped < i {
+                continue; // each pair processed once
+            }
+            new_amps.swap(i, flipped);
+        }
+        self.amplitudes = new_amps;
+    }
+
+    /// Apply a phase-flip (Pauli Z) on physical qubit `q`.
+    fn apply_z(&mut self, q: usize) {
+        let pos = self.bit_pos(q);
+        for (i, amp) in self.amplitudes.iter_mut().enumerate() {
+            if (i >> pos) & 1 == 1 {
+                *amp = -(*amp);
+            }
+        }
+    }
+
+    /// Bit index of physical qubit `q` within the state index.
+    fn bit_pos(&self, q: usize) -> usize {
+        self.n_physical.saturating_sub(1).saturating_sub(q)
+    }
+
+    /// Measure an X-type stabiliser S via the overlap Re(⟨ψ|S|ψ⟩).
+    /// Returns 1 when the eigenvalue is -1 (stabilizer violated), else 0.
+    fn x_stabilizer_bit(&self, qubits: &[usize]) -> usize {
+        let mut mask = 0usize;
+        for &q in qubits {
+            mask |= 1 << self.bit_pos(q);
+        }
+        let n = self.amplitudes.len();
+        let mut overlap: Scalar = 0.0;
+        for i in 0..n {
+            let a = self.amplitudes[i];
+            if a.norm_sqr() < 1e-30 {
+                continue;
+            }
+            let j = i ^ mask;
+            if j >= n {
+                continue;
+            }
+            let b = self.amplitudes[j];
+            // Real part of conj(a) * b.
+            overlap += a.conj().re * b.re + a.conj().im * b.im;
+        }
+        if overlap < 0.0 { 1 } else { 0 }
+    }
+
+    /// Decode and correct a Shor-code syndrome (8 bits).
+    fn correct_shor9(&mut self, syndrome: &[usize]) -> Result<(), String> {
+        if syndrome.len() < 8 {
+            return Err(format!(
+                "shor code: expected 8 syndrome bits, got {}",
+                syndrome.len()
+            ));
+        }
+        // ── Bit-flip correction from the 6 Z-syndromes ──
+        // Block b (qubits 3b..3b+2) uses syndrome bits (2b, 2b+1):
+        //   (0,0)->none, (1,0)->first, (1,1)->middle, (0,1)->last.
+        for b in 0..3 {
+            let (s_first, s_second) = (syndrome[2 * b], syndrome[2 * b + 1]);
+            let qubit = match (s_first, s_second) {
+                (0, 0) => None,
+                (1, 0) => Some(3 * b),
+                (1, 1) => Some(3 * b + 1),
+                (0, 1) => Some(3 * b + 2),
+                _ => unreachable!("syndrome bits are 0 or 1"),
+            };
+            if let Some(q) = qubit {
+                self.apply_x(q);
+            }
+        }
+        // ── Phase-flip correction from the 2 X-syndromes ──
+        // (0,0)->none, (1,0)->block 1, (1,1)->block 2, (0,1)->block 3.
+        // Within a block all three single-qubit Z operators are equivalent on
+        // the codespace, so we apply Z to the first qubit of the block.
+        let (x_first, x_second) = (syndrome[6], syndrome[7]);
+        let block = match (x_first, x_second) {
+            (0, 0) => None,
+            (1, 0) => Some(0),
+            (1, 1) => Some(1),
+            (0, 1) => Some(2),
+            _ => unreachable!("syndrome bits are 0 or 1"),
+        };
+        if let Some(b) = block {
+            self.apply_z(3 * b);
+        }
         Ok(())
     }
 
@@ -388,6 +591,91 @@ mod tests {
     }
 
     #[test]
+    fn test_shor_syndrome_no_error() {
+        let lq = LogicalQubit::new(QuantumCode::Shor9);
+        let synd = lq.detect_error();
+        assert_eq!(synd.len(), 8);
+        assert_eq!(synd, vec![0; 8]);
+    }
+
+    #[test]
+    fn test_shor_correct_bit_flip() {
+        // Encode |0_L>, inject a bit-flip on qubit 4, then decode and correct.
+        let lq = LogicalQubit::new(QuantumCode::Shor9);
+        let mut encoded = lq.encode(1.0.into(), 0.0.into()).unwrap();
+        // Inject X_4: flip physical qubit 4 (bit position n-1-4 = 4).
+        encoded.apply_x(4);
+        let synd = encoded.detect_error();
+        // Bit flip on qubit 4 (middle of block 2) -> Z-syndromes 2 and 3 set.
+        assert_eq!(synd[2], 1);
+        assert_eq!(synd[3], 1);
+        assert_eq!(synd[6], 0);
+        assert_eq!(synd[7], 0);
+        encoded.correct(&synd).unwrap();
+        // Should recover |0_L>.
+        let zero = lq.encode(1.0.into(), 0.0.into()).unwrap();
+        let mut fid = 0.0;
+        for (a, b) in encoded.amplitudes.iter().zip(zero.amplitudes.iter()) {
+            fid += (a.conj() * b).re;
+        }
+        assert!(fid > 0.9999);
+    }
+
+    #[test]
+    fn test_shor_correct_phase_flip() {
+        // Inject a phase-flip (Z_0) on the first qubit of block 1.
+        let lq = LogicalQubit::new(QuantumCode::Shor9);
+        let mut encoded = lq.encode(1.0.into(), 0.0.into()).unwrap();
+        encoded.apply_z(0);
+        let synd = encoded.detect_error();
+        // Z_0 anticommutes with the first X-stabilizer only.
+        assert_eq!(synd[6], 1);
+        assert_eq!(synd[7], 0);
+        encoded.correct(&synd).unwrap();
+        let zero = lq.encode(1.0.into(), 0.0.into()).unwrap();
+        let mut fid = 0.0;
+        for (a, b) in encoded.amplitudes.iter().zip(zero.amplitudes.iter()) {
+            fid += (a.conj() * b).re;
+        }
+        assert!(fid > 0.9999);
+    }
+
+    #[test]
+    fn test_shor_correct_combined() {
+        // Bit-flip on qubit 2 and phase-flip on block 2 (qubit 3).
+        let lq = LogicalQubit::new(QuantumCode::Shor9);
+        let mut encoded = lq.encode(1.0.into(), 0.0.into()).unwrap();
+        encoded.apply_x(2);
+        encoded.apply_z(3);
+        let synd = encoded.detect_error();
+        encoded.correct(&synd).unwrap();
+        let zero = lq.encode(1.0.into(), 0.0.into()).unwrap();
+        let mut fid = 0.0;
+        for (a, b) in encoded.amplitudes.iter().zip(zero.amplitudes.iter()) {
+            fid += (a.conj() * b).re;
+        }
+        assert!(fid > 0.9999);
+    }
+
+    #[test]
+    fn test_surface_syndrome_and_correct() {
+        let lq = LogicalQubit::new(QuantumCode::SurfaceCode { d: 3 });
+        assert_eq!(lq.detect_error(), vec![0; 8]); // 9-1 syndrome bits
+        let mut encoded = lq.encode(1.0.into(), 0.0.into()).unwrap();
+        encoded.apply_x(5);
+        let synd = encoded.detect_error();
+        // Bit flip on qubit 5 -> syndrome leading ones ends before 5.
+        assert!(synd.contains(&1));
+        encoded.correct(&synd).unwrap();
+        let zero = lq.encode(1.0.into(), 0.0.into()).unwrap();
+        let mut fid = 0.0;
+        for (a, b) in encoded.amplitudes.iter().zip(zero.amplitudes.iter()) {
+            fid += (a.conj() * b).re;
+        }
+        assert!(fid > 0.9999);
+    }
+
+    #[test]
     fn test_measure() {
         let lq = LogicalQubit::new(QuantumCode::Repetition3);
         let result = lq.measure();
@@ -404,5 +692,47 @@ mod tests {
         let encoded = lq.encode(alpha, beta).unwrap();
         let norm: Scalar = encoded.amplitudes.iter().map(|a| a.norm_sqr()).sum();
         assert!((norm - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_steane_no_error_syndrome() {
+        let lq = LogicalQubit::new(QuantumCode::Steane7);
+        let synd = lq.detect_error();
+        assert_eq!(synd.len(), 6);
+        assert_eq!(synd, vec![0; 6]);
+    }
+
+    #[test]
+    fn test_steane_correct_bit_flip() {
+        let lq = LogicalQubit::new(QuantumCode::Steane7);
+        let mut encoded = lq.encode(1.0.into(), 0.0.into()).unwrap();
+        // Inject a single X error on qubit 4.
+        encoded.apply_x(4);
+        let synd = encoded.detect_error();
+        assert!(synd[0..3].contains(&1), "X error must be detected");
+        encoded.correct(&synd).unwrap();
+        let zero = lq.encode(1.0.into(), 0.0.into()).unwrap();
+        let mut fid = 0.0;
+        for (a, b) in encoded.amplitudes.iter().zip(zero.amplitudes.iter()) {
+            fid += (a.conj() * b).re;
+        }
+        assert!(fid > 0.9999);
+    }
+
+    #[test]
+    fn test_steane_correct_phase_flip() {
+        let lq = LogicalQubit::new(QuantumCode::Steane7);
+        let mut encoded = lq.encode(1.0.into(), 0.0.into()).unwrap();
+        // Inject a single Z error on qubit 2.
+        encoded.apply_z(2);
+        let synd = encoded.detect_error();
+        assert!(synd[3..6].contains(&1), "Z error must be detected");
+        encoded.correct(&synd).unwrap();
+        let zero = lq.encode(1.0.into(), 0.0.into()).unwrap();
+        let mut fid = 0.0;
+        for (a, b) in encoded.amplitudes.iter().zip(zero.amplitudes.iter()) {
+            fid += (a.conj() * b).re;
+        }
+        assert!(fid > 0.9999);
     }
 }

@@ -260,9 +260,11 @@ impl LibraryDb {
                 .map_err(|e| DbError::QueryError(e.to_string()))?;
         }
 
-        // Performance pragmas
+        // Performance pragmas + integrity enforcement (foreign-key cascade
+        // deletes require this to be ON per-connection).
         conn.execute_batch(
-            "PRAGMA synchronous=NORMAL;
+            "PRAGMA foreign_keys=ON;
+             PRAGMA synchronous=NORMAL;
              PRAGMA cache_size=-8000;       -- 8 MB cache
              PRAGMA temp_store=MEMORY;
              PRAGMA mmap_size=268435456;     -- 256 MB mmap

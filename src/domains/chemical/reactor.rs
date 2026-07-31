@@ -35,6 +35,10 @@ pub struct Cstr {
     pub heat_transfer_area: Scalar,
     /// Coolant temperature (K).
     pub coolant_temperature: Scalar,
+    /// Feed temperature (K).
+    pub feed_temperature: Scalar,
+    /// Volumetric heat capacity of the reaction mixture ρ·Cp (J/(m³·K)).
+    pub rho_cp: Scalar,
 }
 
 impl Cstr {
@@ -56,6 +60,8 @@ impl Cstr {
             heat_transfer_coeff,
             heat_transfer_area,
             coolant_temperature,
+            feed_temperature: 298.15,
+            rho_cp: 4.186e6, // water ρ·Cp at room temperature (J/(m³·K))
         }
     }
 
@@ -90,7 +96,7 @@ impl Cstr {
 
     /// Compute energy balance: dT/dt.
     ///
-    /// ρ·Cp·V·dT/dt = Q·ρ·Cp·(T_in - T) + V·(-ΔH)·r + UA·(T_c - T)
+    /// ρ·Cp·V·dT/dt = Q·ρ·Cp·(T_feed − T) + V·Σⱼ rⱼ·(−ΔHⱼ) + UA·(T_c − T)
     pub fn energy_balance(
         &self,
         t: Scalar,
@@ -98,42 +104,49 @@ impl Cstr {
         reaction: &ReactionKinetics,
         delta_h: Scalar,
     ) -> Scalar {
-        // Reaction heat generation
-        let reaction_terms = reaction.concentration_derivatives(concentrations, t);
-        let heat_gen: Scalar = reaction_terms.iter().sum::<Scalar>() * (-delta_h);
+        // Reaction heat generation from per-reaction rates (not the sum of
+        // dC/dt, which cancels for balanced stoichiometry): V·Σ rⱼ·(−ΔHⱼ).
+        let rates = reaction.reaction_rates(concentrations, t);
+        let heat_gen: Scalar = rates.iter().map(|r| r * (-delta_h)).sum();
 
-        // Heat transfer
+        // Heat transfer through the jacket.
         let heat_transfer = self.heat_transfer_coeff * self.heat_transfer_area
             * (self.coolant_temperature - t);
 
-        // Inlet-outlet enthalpy (simplified: assume ρCp constant)
-        let flow_term = self.flow_rate_in * (self.inlet_concentrations.iter().sum::<Scalar>())
-            - self.flow_rate_out * concentrations.iter().sum::<Scalar>();
+        // Inlet-outlet enthalpy convection: Q·ρ·Cp·(T_feed − T).
+        let flow_enthalpy = self.flow_rate_in * self.rho_cp * (self.feed_temperature - t);
 
-        // Simplified energy balance (per unit volume)
-        heat_gen + heat_transfer / self.volume + flow_term
+        (flow_enthalpy + heat_gen * self.volume + heat_transfer) / (self.rho_cp * self.volume)
     }
 
     /// Solve for steady-state concentrations and temperature.
     ///
-    /// Uses a simple iteration to drive the mass balance to zero.
+    /// Iterates the coupled mass and energy balances with a relaxation step
+    /// until the mass-balance residual converges.
     pub fn steady_state(
         &self,
         reaction: &ReactionKinetics,
         t_guess: Scalar,
+        delta_h: Scalar,
     ) -> Option<(Vec<Scalar>, Scalar)> {
         let n = self.inlet_concentrations.len();
         let mut conc: Vec<Scalar> = self.inlet_concentrations.clone();
-        let t = t_guess;
+        let mut t = t_guess;
 
-        for _iter in 0..10_000 {
+        for _iter in 0..20_000 {
             let mb = self.mass_balance(&conc, reaction);
             let max_residual = mb.iter().map(|v| v.abs()).fold(0.0_f64, f64::max);
 
-            // Update concentrations
+            // Update concentrations (mass balance relaxation).
             let dt = 0.1;
             for i in 0..n {
                 conc[i] = (conc[i] + mb[i] * dt).max(0.0);
+            }
+
+            // Update temperature (coupled energy balance relaxation).
+            let dtdt = self.energy_balance(t, &conc, reaction, delta_h);
+            if dtdt.is_finite() {
+                t += dtdt * dt;
             }
 
             if max_residual < 1e-10 {
@@ -182,7 +195,13 @@ impl Pfr {
     ) -> Vec<Vec<Scalar>> {
         let n_steps = 100;
         let dz = self.length / n_steps as Scalar;
-        let residence_time_step = dz / self.flow_velocity;
+        // Guard against zero flow velocity (startup/degenerate input), which
+        // would otherwise make the residence time step infinite.
+        let residence_time_step = if self.flow_velocity > 0.0 {
+            dz / self.flow_velocity
+        } else {
+            0.0
+        };
 
         let mut results = Vec::with_capacity(n_steps + 1);
         let mut conc: Vec<Scalar> = inlet.to_vec();
@@ -271,12 +290,15 @@ mod tests {
     fn test_cstr_steady_state() {
         let cstr = Cstr::new(1.0, 0.1, 0.1, vec![1.0, 0.0], 0.0, 0.0, 300.0);
         let kinetics = simple_kinetics();
-        let result = cstr.steady_state(&kinetics, 300.0);
+        let result = cstr.steady_state(&kinetics, 300.0, 50_000.0);
         assert!(result.is_some());
-        let (conc, _t) = result.unwrap();
+        let (conc, t) = result.unwrap();
         // At steady state for A->B, C_A should be less than inlet
         assert!(conc[0] < 1.0);
         assert!(conc[1] > 0.0);
+        // With no heat transfer and exothermic reaction the temperature should
+        // rise above the feed temperature (298.15 K).
+        assert!(t.is_finite() && t > 298.0);
     }
 
     #[test]

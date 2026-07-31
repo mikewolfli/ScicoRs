@@ -6,9 +6,19 @@
 use crate::core::types::Scalar;
 
 /// Dot product of two vectors.
+///
+/// Uses the adaptive backend for large inputs (rayon / registered GPU).
 pub fn dot(a: &[Scalar], b: &[Scalar]) -> Option<Scalar> {
     if a.len() != b.len() || a.is_empty() {
         return None;
+    }
+    // Route through the adaptive dispatcher for large vectors.
+    if a.len()
+        >= crate::core::compute::backend::global()
+            .config()
+            .parallel_threshold
+    {
+        return crate::core::compute::backend::global().dot(a, b).ok();
     }
     let mut s = 0.0;
     for i in 0..a.len() {
@@ -26,13 +36,9 @@ pub fn cross(a: &[Scalar; 3], b: &[Scalar; 3]) -> [Scalar; 3] {
     ]
 }
 
-/// Euclidean norm (L2) of a vector.
+/// Euclidean norm (L2) of a vector (adaptive BLAS-1 `nrm2`).
 pub fn norm(v: &[Scalar]) -> Scalar {
-    let mut s = 0.0;
-    for &x in v {
-        s += x * x;
-    }
-    s.sqrt()
+    crate::core::compute::linalg::nrm2(v)
 }
 
 /// Squared Euclidean norm (L2²).

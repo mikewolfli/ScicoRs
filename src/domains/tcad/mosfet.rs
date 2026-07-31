@@ -13,7 +13,6 @@ use crate::core::types::{
     ComponentStatus, PortDirection as PD, Scalar, SignalType, SignalValue, Time,
 };
 
-
 // ──────────────────────────────────────────────
 // 1. MOSFET Model Parameters
 // ──────────────────────────────────────────────
@@ -84,10 +83,12 @@ impl MosfetModel {
     /// Threshold voltage including body effect.
     pub fn threshold_voltage(&self, vbs: Scalar) -> Scalar {
         if self.is_nmos {
-            let vth = self.vto + self.gamma * ((self.phi - vbs).sqrt() - self.phi.sqrt());
+            // Clamp the sqrt argument so forward body bias (vbs > φ) does not
+            // produce NaN (which f64::max would silently mask to 0.01 V).
+            let vth = self.vto + self.gamma * ((self.phi - vbs).max(0.0).sqrt() - self.phi.sqrt());
             vth.max(0.01) // Ensure positive for NMOS
         } else {
-            let vth = self.vto - self.gamma * ((self.phi + vbs).sqrt() - self.phi.sqrt());
+            let vth = self.vto - self.gamma * ((self.phi + vbs).max(0.0).sqrt() - self.phi.sqrt());
             vth.min(-0.01) // Ensure negative for PMOS
         }
     }
@@ -96,7 +97,6 @@ impl MosfetModel {
     pub fn beta(&self) -> Scalar {
         self.kp * self.w / self.l
     }
-
 }
 
 impl MosfetModel {

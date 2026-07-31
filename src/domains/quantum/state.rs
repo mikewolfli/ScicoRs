@@ -188,23 +188,13 @@ impl DensityMatrix {
 
     /// Compute von Neumann entropy S = -Tr(ρ·log₂ρ).
     pub fn von_neumann_entropy(&self) -> Scalar {
-        // Diagonalize approximately (only works well for small dim)
-        // For now, use a simpler approximation based on purity
-        let p = self.purity();
-        if (p - 1.0).abs() < 1e-12 {
-            return 0.0; // Pure state
+        let mut s = 0.0;
+        for &lambda in &self.eigenvalues() {
+            if lambda > 1e-12 {
+                s -= lambda * lambda.log2();
+            }
         }
-        // Linear entropy approximation S_lin = (dim/(dim-1)) * (1 - Tr(ρ²))
-        if self.dim <= 1 {
-            return 0.0;
-        }
-        let lin_entropy = (self.dim as Scalar / (self.dim - 1) as Scalar) * (1.0 - p);
-        // Map to approximate von Neumann: S ≈ -log₂(1 - S_lin) when nearly pure
-        if lin_entropy < 0.999 {
-            -lin_entropy * lin_entropy.log2()
-        } else {
-            (self.dim as Scalar).log2() // Max entropy
-        }
+        s.max(0.0)
     }
 
     /// Apply a set of Kraus operators: ρ' = Σᵢ Kᵢ·ρ·Kᵢ†.

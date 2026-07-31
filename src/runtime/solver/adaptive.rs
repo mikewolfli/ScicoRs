@@ -156,10 +156,11 @@ impl OdeSolver for RK45 {
         // Update solver statistics
         self.stats.function_evals += 7; // 7 stages evaluated
 
-        // Update state with 5th order result
-        x.copy_from_slice(&x5);
-
         if max_error <= 1.0 {
+            // Only mutate the caller's state on an accepted step, so a
+            // rejected step leaves x unchanged and can be retried with the
+            // suggested dt from a clean state.
+            x.copy_from_slice(&x5);
             self.stats.steps_accepted += 1;
             Ok(SolverStepResult::Accepted)
         } else {
@@ -295,9 +296,9 @@ impl OdeSolver for RK23 {
         // Update solver statistics
         self.stats.function_evals += 4; // 4 stages evaluated
 
-        x.copy_from_slice(&x3);
-
         if max_error <= 1.0 {
+            // Only mutate the caller's state on an accepted step (see RK45).
+            x.copy_from_slice(&x3);
             self.stats.steps_accepted += 1;
             Ok(SolverStepResult::Accepted)
         } else {
@@ -451,9 +452,9 @@ impl OdeSolver for CashKarp {
         // Update solver statistics
         self.stats.function_evals += 6; // 6 stages evaluated
 
-        x.copy_from_slice(&x5);
-
         if max_error <= 1.0 {
+            // Only mutate the caller's state on an accepted step (see RK45).
+            x.copy_from_slice(&x5);
             self.stats.steps_accepted += 1;
             Ok(SolverStepResult::Accepted)
         } else {

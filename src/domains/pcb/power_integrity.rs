@@ -89,13 +89,23 @@ impl DecapNetwork {
 impl Default for DecapNetwork { fn default() -> Self { Self::new() } }
 
 /// PDN impedance at frequency f.
-pub fn pdn_impedance(_vrm_output: Scalar, decap_network: &DecapNetwork, plane_cap: Scalar, freq: Scalar) -> Complex<Scalar> {
+///
+/// The VRM output impedance `vrm_output` (Ω) is placed in series with the
+/// parallel combination of the plane capacitance and the decoupling network:
+/// `Z_pdn = Z_vrm + (Z_plane ∥ Z_decap)`.
+pub fn pdn_impedance(vrm_output: Scalar, decap_network: &DecapNetwork, plane_cap: Scalar, freq: Scalar) -> Complex<Scalar> {
     let omega = 2.0 * std::f64::consts::PI * freq;
     let z_plane = if plane_cap > 0.0 { Complex::new(0.0, -1.0 / (omega * plane_cap)) } else { Complex::new(0.0, 0.0) };
     let z_decap = decap_network.impedance(freq);
-    if z_decap.norm() > 0.0 && z_plane.norm() > 0.0 {
+    let z_parallel = if z_decap.norm() > 0.0 && z_plane.norm() > 0.0 {
         (z_decap * z_plane) / (z_decap + z_plane)
-    } else if z_decap.norm() > 0.0 { z_decap } else { z_plane }
+    } else if z_decap.norm() > 0.0 {
+        z_decap
+    } else {
+        z_plane
+    };
+    // VRM source impedance in series with the rest of the PDN.
+    Complex::new(vrm_output, 0.0) + z_parallel
 }
 
 #[cfg(test)]

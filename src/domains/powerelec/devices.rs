@@ -36,6 +36,8 @@ pub struct PowerMosfet {
     pub c_rss: Scalar,
     pub v_dss: Scalar,
     pub i_d_max: Scalar,
+    /// Combined rise + fall switching time (s), used for switching-loss.
+    pub t_rf: Scalar,
 }
 
 impl PowerMosfet {
@@ -43,8 +45,9 @@ impl PowerMosfet {
         i_d * i_d * rds_on * duty
     }
 
+    /// Switching loss: P = ½·V_ds·I_d·(t_r + t_f)·f.
     pub fn switching_loss(&self, i_d: Scalar, v_dc: Scalar, freq: Scalar) -> Scalar {
-        0.5 * v_dc * i_d * (self.q_g / self.c_iss) * freq
+        0.5 * v_dc * i_d * self.t_rf * freq
     }
 
     pub fn gate_drive_power(&self, v_gs: Scalar, freq: Scalar) -> Scalar {
@@ -111,14 +114,14 @@ mod tests {
 
     #[test]
     fn test_mosfet_conduction_loss() {
-        let m = PowerMosfet { r_ds_on: 0.01, v_th: 3.0, q_g: 20e-9, c_iss: 1e-9, c_rss: 10e-12, v_dss: 100.0, i_d_max: 50.0 };
+        let m = PowerMosfet { r_ds_on: 0.01, v_th: 3.0, q_g: 20e-9, c_iss: 1e-9, c_rss: 10e-12, v_dss: 100.0, i_d_max: 50.0, t_rf: 100e-9 };
         let p = m.conduction_loss(10.0, 0.01, 0.5);
         assert!((p - 0.5).abs() < 0.01);
     }
 
     #[test]
     fn test_mosfet_temp_dep() {
-        let m = PowerMosfet { r_ds_on: 0.01, v_th: 3.0, q_g: 20e-9, c_iss: 1e-9, c_rss: 10e-12, v_dss: 100.0, i_d_max: 50.0 };
+        let m = PowerMosfet { r_ds_on: 0.01, v_th: 3.0, q_g: 20e-9, c_iss: 1e-9, c_rss: 10e-12, v_dss: 100.0, i_d_max: 50.0, t_rf: 100e-9 };
         let r_hot = m.rds_on_temp(125.0);
         assert!(r_hot > 0.01);
     }

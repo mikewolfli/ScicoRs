@@ -12,6 +12,8 @@ pub struct NeuronModel {
     pub refractory_remaining: Scalar,
     /// Membrane potential deviation from rest (mV), tracked internally.
     pub v: Scalar,
+    /// Current simulation time (s), advanced by each `lif_step` call.
+    pub current_time: Scalar,
 }
 
 impl NeuronModel {
@@ -28,6 +30,9 @@ impl NeuronModel {
     ///
     /// dV/dt = (V_rest - V + i_syn * R) / τ, with τ = R·C_m = C_m (R ≈ 1).
     pub fn lif_step(&mut self, i_syn: Scalar, dt: Scalar) -> Option<Scalar> {
+        // Advance the internal clock so reported spike times are real.
+        self.current_time += dt;
+
         if self.refractory_remaining > 0.0 {
             // Neuron is in absolute refractory period
             self.refractory_remaining -= dt;
@@ -41,8 +46,8 @@ impl NeuronModel {
 
         // Check for spike
         if self.detect_spike(v_new, self.v) {
-            let spike_time = self.last_spike_time; // placeholder timing
-            self.last_spike_time += dt;
+            let spike_time = self.current_time;
+            self.last_spike_time = spike_time;
             self.refractory_remaining = self.refractory_period;
             self.v = self.v_rest;
             Some(spike_time)
@@ -78,6 +83,7 @@ mod tests {
             last_spike_time: 0.0,
             refractory_remaining: 0.0,
             v: -65.0,
+            current_time: 0.0,
         };
         assert!(n.detect_spike(-50.0, -60.0));
         assert!(!n.detect_spike(-60.0, -65.0));
@@ -94,11 +100,13 @@ mod tests {
             last_spike_time: 0.0,
             refractory_remaining: 0.0,
             v: -65.0,
+            current_time: 0.0,
         };
         // Sub-threshold current
         let result = n.lif_step(5.0, 0.001);
         assert!(result.is_none());
         assert!(n.v > -65.0 && n.v < -55.0);
+        assert!((n.current_time - 0.001).abs() < 1e-12);
     }
 
     #[test]
@@ -111,16 +119,21 @@ mod tests {
             last_spike_time: 0.0,
             refractory_remaining: 0.0,
             v: -65.0,
+            current_time: 0.0,
         };
         // Strong current should cause a spike
         let mut spiked = false;
+        let mut spike_time = -1.0;
         for _ in 0..300 {
-            if n.lif_step(50.0, 0.001).is_some() {
+            if let Some(t) = n.lif_step(50.0, 0.001) {
                 spiked = true;
+                spike_time = t;
                 break;
             }
         }
         assert!(spiked);
+        // Spike time must be the real accumulated clock (> 0), not a stale 0.
+        assert!(spike_time > 0.0);
         // After spike, neuron should be in refractory
         assert!(n.refractory_remaining > 0.0);
     }
@@ -135,6 +148,7 @@ mod tests {
             last_spike_time: 0.0,
             refractory_remaining: 0.005,
             v: -65.0,
+            current_time: 0.0,
         };
         // During refractory, even strong current is ignored
         let result = n.lif_step(100.0, 0.001);

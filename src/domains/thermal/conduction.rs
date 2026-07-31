@@ -242,6 +242,8 @@ impl HeatConduction1D {
 pub struct HeatConduction2D {
     /// Thermal diffusivity α = k/(ρ·cp) (m²/s).
     pub alpha: Scalar,
+    /// Thermal conductivity (W/(m·K)), used for flux and convection BCs.
+    pub k: Scalar,
     /// Number of cells in the x-direction.
     pub nx: usize,
     /// Number of cells in the y-direction.
@@ -318,14 +320,15 @@ impl HeatConduction2D {
                     }
                 }
                 BoundaryCondition::FixedHeatFlux(q) => {
-                    // Neumann BC: q = -k * dT/dn, approximated with the adjacent interior cell.
+                    // Neumann BC: q = -k·dT/dn → T_surf = T_adj + q·dx/k.
                     for k in 0..self.ny {
                         let adj = if j == 0 {
                             self.temperature[i + 1][k]
                         } else {
                             self.temperature[i - 1][k]
                         };
-                        self.temperature[i][k] = adj + q * self.dx / self.alpha;
+                        let kk = if self.k > 0.0 { self.k } else { self.alpha };
+                        self.temperature[i][k] = adj + q * self.dx / kk;
                     }
                 }
                 BoundaryCondition::Convection(h, t_ambient) => {
@@ -338,9 +341,9 @@ impl HeatConduction2D {
                         } else {
                             self.temperature[i - 1][k]
                         };
+                        let kk = if self.k > 0.0 { self.k } else { self.alpha };
                         self.temperature[i][k] =
-                            (h * t_ambient * dx / self.alpha + adj) / (1.0 + h * dx / self.alpha);
-                        // Overwrite to prevent singularity from surface temp
+                            (h * t_ambient * dx / kk + adj) / (1.0 + h * dx / kk);
                         if self.temperature[i][k].is_nan() || self.temperature[i][k].is_infinite() {
                             self.temperature[i][k] = t_surf;
                         }
@@ -375,7 +378,8 @@ impl HeatConduction2D {
                         } else {
                             self.temperature[i][k + 1]
                         };
-                        self.temperature[i][k] = adj + q * self.dy / self.alpha;
+                        let kk = if self.k > 0.0 { self.k } else { self.alpha };
+                        self.temperature[i][k] = adj + q * self.dy / kk;
                     }
                 }
                 BoundaryCondition::Convection(h, t_ambient) => {
@@ -387,8 +391,9 @@ impl HeatConduction2D {
                         } else {
                             self.temperature[i][k + 1]
                         };
+                        let kk = if self.k > 0.0 { self.k } else { self.alpha };
                         self.temperature[i][k] =
-                            (h * t_ambient * dy / self.alpha + adj) / (1.0 + h * dy / self.alpha);
+                            (h * t_ambient * dy / kk + adj) / (1.0 + h * dy / kk);
                         if self.temperature[i][k].is_nan() || self.temperature[i][k].is_infinite() {
                             self.temperature[i][k] = t_surf;
                         }
@@ -553,6 +558,7 @@ mod tests {
     fn test_heat_conduction_2d_gauss_seidel() {
         let mut hc2d = HeatConduction2D {
             alpha: 1e-4,
+            k: 50.0,
             nx: 10,
             ny: 10,
             dx: 0.01,
@@ -574,6 +580,7 @@ mod tests {
     fn test_heat_conduction_2d_check_convergence() {
         let hc2d = HeatConduction2D {
             alpha: 1e-4,
+            k: 50.0,
             nx: 10,
             ny: 10,
             dx: 0.01,

@@ -52,10 +52,12 @@ impl NavierStokes2D {
     ///
     /// # Panics
     ///
-    /// Panics if `nx == 0` or `ny == 0` or any spatial/temporal step ≤ 0.
+    /// Panics if `nx < 2` or `ny < 2` (the staggered-grid boundary stencils
+    /// require at least two cells per direction) or if any spatial/temporal
+    /// step ≤ 0.
     pub fn new(nx: usize, ny: usize, dx: Scalar, dy: Scalar, dt: Scalar, re: Scalar) -> Self {
-        assert!(nx > 0, "nx must be > 0");
-        assert!(ny > 0, "ny must be > 0");
+        assert!(nx >= 2, "nx must be >= 2");
+        assert!(ny >= 2, "ny must be >= 2");
         assert!(dx > 0.0, "dx must be > 0");
         assert!(dy > 0.0, "dy must be > 0");
         assert!(dt > 0.0, "dt must be > 0");

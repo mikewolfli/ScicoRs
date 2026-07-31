@@ -5,23 +5,40 @@ use crate::core::types::Scalar;
 /// PCB via model.
 #[derive(Debug, Clone)]
 pub struct ViaModel {
-    pub drill_diameter: Scalar, pub pad_diameter: Scalar,
-    pub stub_length: Scalar, pub er: Scalar,
+    pub drill_diameter: Scalar,
+    pub pad_diameter: Scalar,
+    pub stub_length: Scalar,
+    pub er: Scalar,
 }
 
 impl ViaModel {
     pub fn new(drill: Scalar, pad: Scalar, stub: Scalar, er: Scalar) -> Self {
-        Self { drill_diameter: drill, pad_diameter: pad, stub_length: stub, er }
+        Self {
+            drill_diameter: drill,
+            pad_diameter: pad,
+            stub_length: stub,
+            er,
+        }
     }
     pub fn resonant_frequency(&self) -> Scalar {
-        if self.stub_length <= 0.0 { return 0.0; }
+        if self.stub_length <= 0.0 {
+            return 0.0;
+        }
         let c0 = 2.99792458e8;
         c0 / (4.0 * self.stub_length * self.er.sqrt())
     }
     pub fn insertion_loss(&self, freq: Scalar) -> Scalar {
         let fr = self.resonant_frequency();
-        if fr <= 0.0 { return 0.0; }
-        -20.0 * (freq / fr).sin().abs().log10().max(-40.0)
+        if fr <= 0.0 {
+            return 0.0;
+        }
+        // Quarter-wave stub resonator: loss ∝ |sin(π/2 · f/fr)|, maximum at f=fr.
+        -20.0
+            * (std::f64::consts::PI * 0.5 * freq / fr)
+                .sin()
+                .abs()
+                .log10()
+                .max(-40.0)
     }
     pub fn stub_equalization(&mut self, back_drill_depth: Scalar) {
         self.stub_length = (self.stub_length - back_drill_depth).max(0.0);

@@ -238,6 +238,79 @@ impl SimEngine {
         Ok(())
     }
 
+    /// Seed the engine's unified continuous-state vector from the blocks'
+    /// internal state, so the ODE solver starts from the current block values.
+    fn collect_state_from_blocks(&mut self) -> Result<(), SimError> {
+        let mut offset = 0;
+        for block_id in &self.execution_order {
+            if let Some(block) = self.diagram.get_block(block_id) {
+                let n_cont = block.state_declaration().continuous_count();
+                if n_cont > 0 {
+                    let vals = block.read_state();
+                    for (j, v) in vals.iter().take(n_cont).enumerate() {
+                        if offset + j < self.state.continuous.len() {
+                            self.state.continuous.set_index(offset + j, *v);
+                        }
+                    }
+                    offset += n_cont;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Write the engine's integrated continuous-state vector back into the
+    /// blocks' internal state so their next `output()` reflects new values.
+    fn push_state_to_blocks(&mut self) -> Result<(), SimError> {
+        let block_ids: Vec<String> = self.execution_order.clone();
+        let mut offset = 0;
+        for block_id in &block_ids {
+            if let Some(block) = self.diagram.get_block_mut(block_id) {
+                let n_cont = block.state_declaration().continuous_count();
+                if n_cont > 0 {
+                    let vals: Vec<Scalar> = (0..n_cont)
+                        .map(|j| self.state.continuous.get_index(offset + j))
+                        .collect();
+                    block.write_state(&vals)?;
+                    offset += n_cont;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Project a flat solver state vector into the blocks' internal state.
+    ///
+    /// Called for every internal stage evaluation of a multi-stage ODE solver
+    /// so `derivative()` is evaluated at the candidate state `x` rather than
+    /// the stale step-start state.
+    fn project_state(
+        diagram: &mut Diagram,
+        execution_order: &[BlockId],
+        x: &[Scalar],
+    ) -> Result<(), SimError> {
+        let mut offset = 0;
+        for block_id in execution_order {
+            if let Some(block) = diagram.get_block_mut(block_id) {
+                let n_cont = block.state_declaration().continuous_count();
+                if n_cont > 0 {
+                    let vals: Vec<Scalar> = (0..n_cont)
+                        .map(|j| {
+                            if offset + j < x.len() {
+                                x[offset + j]
+                            } else {
+                                0.0
+                            }
+                        })
+                        .collect();
+                    block.write_state(&vals)?;
+                    offset += n_cont;
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Execute a single time step.
     ///
     /// The step performs the following phases in order:
@@ -269,10 +342,12 @@ impl SimEngine {
             return Ok(SimStepResult::Finished);
         }
 
-        // ── Phase 1: Set time on all blocks ──
+        // ── Phase 1: Set time and step size on all blocks ──
+        let step_dt = self.context.dt;
         for block_id in &self.execution_order {
             if let Some(block) = self.diagram.get_block_mut(block_id) {
                 block.set_time(self.context.t);
+                block.set_step(step_dt);
             }
         }
 
@@ -287,8 +362,10 @@ impl SimEngine {
         }
 
         // ── Phase 3: Signal propagation via scheduler ──
-        // Extract block outputs to the scheduler's signal cache and propagate
-        // through links to destination input ports.
+        // Extract block outputs to the scheduler's signal cache, propagate
+        // through links, and write the propagated values back into the
+        // destination blocks' input ports so downstream blocks actually
+        // observe their inputs on the next phase.
         crate::runtime::scheduler::signal_prop::extract_outputs(
             &self.diagram,
             self.scheduler.signal_cache_mut(),
@@ -296,6 +373,10 @@ impl SimEngine {
         crate::runtime::scheduler::signal_prop::propagate_signals(
             &self.diagram,
             self.scheduler.signal_cache_mut(),
+        )?;
+        crate::runtime::scheduler::signal_prop::update_inputs(
+            &mut self.diagram,
+            self.scheduler.signal_cache(),
         )?;
 
         // ── Phase 4: Integrate continuous state using ODE solver ──
@@ -305,34 +386,83 @@ impl SimEngine {
             let t = self.context.t;
             let dt = self.context.dt;
 
-            // Build RHS: collect derivatives from each block into a flat vector.
-            // This wraps the multi-block derivative computation into a single ODE function.
+            // Seed the engine's unified state vector from the blocks' own
+            // internal state (source of truth at the start of the step).
+            self.collect_state_from_blocks()?;
+
+            // Build RHS: project the solver's candidate state vector into the
+            // blocks, advance their internal clock to the stage time, and
+            // re-evaluate the (pure) network outputs so time-varying sources
+            // and feedthrough blocks are correct at each solver stage. Blocks
+            // with output side effects (e.g. PID integral accumulation) are
+            // not re-run; they keep the step-start output.
             {
                 let execution_order = self.execution_order.clone();
+                let diagram = &mut self.diagram;
+                let cache = self.scheduler.signal_cache_mut();
 
-                let mut rhs = |_x: &[f64], _t: f64, dx_out: &mut [f64]| -> Result<(), SimError> {
-                    // Collect derivatives from each continuous block
-                    let mut offset = 0;
-                    for block_id in &execution_order {
-                        if let Some(block) = self.diagram.get_block(block_id) {
-                            let n_cont = block.state_declaration().continuous_count();
-                            if n_cont > 0 {
-                                let block_dx = block.derivative()?;
-                                for (j, &val) in block_dx.iter().enumerate() {
-                                    if offset + j < dx_out.len() {
-                                        dx_out[offset + j] = val;
-                                    }
-                                }
-                                offset += n_cont;
+                let mut rhs =
+                    |x: &[f64], stage_t: f64, dx_out: &mut [f64]| -> Result<(), SimError> {
+                        // 1. Project the candidate state into the blocks so
+                        //    derivative() is evaluated at the correct state.
+                        Self::project_state(diagram, &execution_order, x)?;
+
+                        // 2. Advance block clocks to the stage time.
+                        for block_id in &execution_order {
+                            if let Some(block) = diagram.get_block_mut(block_id) {
+                                block.set_time(stage_t);
                             }
                         }
-                    }
-                    Ok(())
-                };
+
+                        // 3. Re-evaluate outputs at the stage state/time.
+                        for block_id in &execution_order {
+                            if let Some(block) = diagram.get_block_mut(block_id) {
+                                if !block.has_output_side_effects() {
+                                    block.execute_phase(ExecutionPhase::Output)?;
+                                }
+                            }
+                        }
+
+                        // 4. Re-propagate the stage outputs to input ports.
+                        crate::runtime::scheduler::signal_prop::extract_outputs(diagram, cache)?;
+                        crate::runtime::scheduler::signal_prop::propagate_signals(diagram, cache)?;
+                        crate::runtime::scheduler::signal_prop::update_inputs(diagram, cache)?;
+
+                        // 5. Collect derivatives from each continuous block.
+                        let mut offset = 0;
+                        for block_id in &execution_order {
+                            if let Some(block) = diagram.get_block(block_id) {
+                                let n_cont = block.state_declaration().continuous_count();
+                                if n_cont > 0 {
+                                    let block_dx = block.derivative()?;
+                                    for (j, &val) in block_dx.iter().enumerate() {
+                                        if offset + j < dx_out.len() {
+                                            dx_out[offset + j] = val;
+                                        }
+                                    }
+                                    offset += n_cont;
+                                }
+                            }
+                        }
+                        Ok(())
+                    };
 
                 let state_slice = self.state.continuous.values_mut();
-                self.solver.step(&mut rhs, state_slice, t, dt)?;
+                let step_result = self.solver.step(&mut rhs, state_slice, t, dt)?;
+                if !step_result.is_ok() {
+                    return Err(SimError::runtime(format!(
+                        "solver '{}' rejected step at t={} (engine uses fixed dt={}); \
+                         use a fixed-step solver (Euler/RK4/Heun/Midpoint) or reduce dt",
+                        self.solver.name(),
+                        t,
+                        dt
+                    )));
+                }
             }
+
+            // Write the integrated state back into the blocks' internal state
+            // so their next `output()` reflects the new continuous values.
+            self.push_state_to_blocks()?;
         }
 
         // ── Phase 5: Discrete update ──
@@ -824,5 +954,166 @@ mod tests {
         let solver = engine.solver();
         assert!(solver.stats().steps_accepted > 0);
         assert!(solver.stats().function_evals > 0);
+    }
+
+    // ────────────────────────────────────────────────────────────
+    // Real-behavior integration tests (verify the dataflow actually
+    // moves signals between blocks and integrates continuous state).
+    // ────────────────────────────────────────────────────────────
+
+    /// A `ConstantSource -> Gain -> (read gain output)` chain must propagate
+    /// the constant through the link so the Gain outputs `k * value`.
+    #[test]
+    fn test_engine_signal_flow_reaches_blocks() {
+        use crate::blocks::math::Gain;
+        use crate::blocks::sources::ConstantSource;
+
+        let mut d = Diagram::new("flow");
+        d.add_block(Box::new(ConstantSource::scalar("src", 3.0)));
+        d.add_block(Box::new(Gain::new("gain", 5.0)));
+        d.add_link(Link::new("l1", "src", "out", "gain", "u"));
+        d.compute_execution_order();
+
+        let config = TimeConfig::until(1.0);
+        let mut engine = SimEngine::new(d, config).unwrap();
+        engine.init().unwrap();
+        engine.start().unwrap();
+        // Run enough steps for the value to propagate through the link.
+        for _ in 0..3 {
+            engine.step().unwrap();
+        }
+
+        // The Gain's output port must now hold 5 * 3 = 15 (written by output()).
+        let gain_out = engine
+            .diagram()
+            .get_block("gain")
+            .and_then(|b| b.ports().get("y"))
+            .and_then(|p| p.read())
+            .and_then(|s| s.as_scalar());
+        assert_eq!(gain_out, Some(15.0), "gain output should be 5 * constant");
+    }
+
+    /// A `ConstantSource(2) -> Integrator(0)` diagram must integrate the
+    /// constant so the engine's continuous state reaches ~2.0 at t = 1.0.
+    #[test]
+    fn test_engine_continuous_state_integrates() {
+        use crate::blocks::continuous::Integrator;
+        use crate::blocks::sources::ConstantSource;
+
+        let mut d = Diagram::new("integrate");
+        d.add_block(Box::new(ConstantSource::scalar("src", 2.0)));
+        d.add_block(Box::new(Integrator::new("int", 0.0)));
+        d.add_link(Link::new("l1", "src", "out", "int", "u"));
+        d.compute_execution_order();
+
+        let config = TimeConfig::until(1.0);
+        let mut engine = SimEngine::new(d, config).unwrap();
+        engine.init().unwrap();
+        engine.start().unwrap();
+        let summary = engine.run();
+
+        assert!(summary.completed);
+        assert!((summary.final_time - 1.0).abs() < 1e-6);
+        let x = engine.state.continuous.values()[0];
+        assert!(
+            (x - 2.0).abs() < 1e-9,
+            "integrator of constant 2.0 over 1.0 s should reach ~2.0, got {}",
+            x
+        );
+    }
+
+    /// RK4 must be more accurate than Euler for a time-varying input
+    /// (integrating sin(t) over [0,1] = 1 - cos(1) ≈ 0.45969769).
+    #[test]
+    fn test_engine_rk4_more_accurate_than_euler() {
+        use crate::blocks::continuous::Integrator;
+        use crate::blocks::sources::SineSource;
+
+        let build = || {
+            let mut d = Diagram::new("rk4_acc");
+            // ω = 1 ⇒ freq = 1/(2π); integrate sin(t).
+            d.add_block(Box::new(SineSource::new(
+                "src",
+                1.0,
+                1.0 / (2.0 * std::f64::consts::PI),
+                0.0,
+                0.0,
+            )));
+            d.add_block(Box::new(Integrator::new("int", 0.0)));
+            d.add_link(Link::new("l1", "src", "out", "int", "u"));
+            d.compute_execution_order();
+            d
+        };
+
+        let mut config = TimeConfig::until(1.0);
+        config.initial_step = 0.01;
+        config.max_step = 0.01;
+        config.min_step = 0.01;
+
+        let mut euler = SimEngine::new(build(), config).unwrap();
+        let mut rk4 = SimEngine::new(build(), config)
+            .unwrap()
+            .with_solver(Box::new(crate::runtime::solver::RK4::new()));
+        euler.run();
+        rk4.run();
+
+        let exact = 1.0 - 1.0_f64.cos();
+        let x_euler = euler.state.continuous.values()[0];
+        let x_rk4 = rk4.state.continuous.values()[0];
+        let err_euler = (x_euler - exact).abs();
+        let err_rk4 = (x_rk4 - exact).abs();
+        assert!(
+            err_rk4 < err_euler,
+            "RK4 error {} should be < Euler error {}",
+            err_rk4,
+            err_euler
+        );
+        assert!(
+            err_rk4 < 1e-6,
+            "RK4 should be highly accurate, got {}",
+            x_rk4
+        );
+    }
+
+    /// The PID controller's step size must be synced from the engine, so the
+    /// integral term uses the actual simulation dt, not the hardcoded 0.01.
+    #[test]
+    fn test_engine_pid_uses_engine_step() {
+        use crate::blocks::continuous::PIDController;
+        use crate::blocks::sources::ConstantSource;
+
+        let mut d = Diagram::new("pid");
+        d.add_block(Box::new(ConstantSource::scalar("ref", 10.0)));
+        d.add_block(Box::new(ConstantSource::scalar("meas", 0.0)));
+        d.add_block(Box::new(PIDController::new("pid", 1.0, 2.0, 0.0)));
+        d.add_link(Link::new("l1", "ref", "out", "pid", "ref"));
+        d.add_link(Link::new("l2", "meas", "out", "pid", "meas"));
+        d.compute_execution_order();
+
+        let mut config = TimeConfig::until(1.0);
+        config.initial_step = 0.25;
+        config.max_step = 0.25;
+        config.min_step = 0.25;
+
+        let mut engine = SimEngine::new(d, config).unwrap();
+        engine.init().unwrap();
+        engine.start().unwrap();
+        let _ = engine.run();
+
+        // With ki=2.0, dt=0.25 and error=10 from step 2 onward:
+        // integral grows by 2.5 per step → y = kp*e + ki*∫e ≈ 25 after 4 steps
+        // (a 5th step would reach 30, but the run stops at t=1.0).
+        let y = engine
+            .diagram()
+            .get_block("pid")
+            .and_then(|b| b.ports().get("y"))
+            .and_then(|p| p.read())
+            .and_then(|s| s.as_scalar())
+            .unwrap_or(0.0);
+        assert!(
+            (y - 25.0).abs() < 0.5,
+            "PID output should reflect engine dt (≈25), got {}",
+            y
+        );
     }
 }

@@ -104,27 +104,38 @@ impl ReactionKinetics {
             "concentration vector length must match species_count"
         );
 
+        let rates = self.reaction_rates(concentrations, 0.0);
         let mut derivatives = vec![0.0; self.species_count];
-
-        for j in 0..self.reaction_count {
-            // Compute reaction rate r_j using reactant concentrations
-            let mut rate = self.rate_constants[j];
-            for i in 0..self.species_count {
-                let nu = self.stoichiometry[j][i];
-                if nu < 0.0 {
-                    // Reactant: use concentration raised to |ν|
-                    let exponent = -nu;
-                    rate *= concentrations[i].powf(exponent);
-                }
-            }
-
-            // Accumulate into derivatives
+        for (j, rate) in rates.iter().enumerate() {
             for i in 0..self.species_count {
                 derivatives[i] += self.stoichiometry[j][i] * rate;
             }
         }
-
         derivatives
+    }
+
+    /// Compute the rate r_j of each reaction (mol/(m³·s)).
+    ///
+    /// For each reaction j: r_j = k_j · Πᵢ Cᵢ^{|νᵢⱼ|} over reactants (νᵢⱼ < 0).
+    /// This is the per-reaction rate needed for heat generation.
+    pub fn reaction_rates(&self, concentrations: &[Scalar], _t: Scalar) -> Vec<Scalar> {
+        assert_eq!(
+            concentrations.len(),
+            self.species_count,
+            "concentration vector length must match species_count"
+        );
+        let mut rates = vec![0.0; self.reaction_count];
+        for j in 0..self.reaction_count {
+            let mut rate = self.rate_constants[j];
+            for i in 0..self.species_count {
+                let nu = self.stoichiometry[j][i];
+                if nu < 0.0 {
+                    rate *= concentrations[i].powf(-nu);
+                }
+            }
+            rates[j] = rate;
+        }
+        rates
     }
 
     /// Advance concentrations by one Euler step of size `dt`.

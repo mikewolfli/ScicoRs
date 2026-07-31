@@ -65,6 +65,8 @@ impl AcousticBEM {
     }
 
     /// Normal derivative of Green's function: ∂G/∂n.
+    ///
+    /// For G = e^{ikr}/(4πr), ∂G/∂n = G·cosθ·(ik − 1/r).
     fn green_dn(&self, r: Scalar, cos_angle: Scalar) -> CS {
         let k = self.wave_number();
         if r < 1e-30 {
@@ -73,7 +75,7 @@ impl AcousticBEM {
         let phase = k * r;
         let (c, s) = phase.sin_cos();
         let g = CS::new(c, s) / (4.0 * std::f64::consts::PI * r);
-        g * cos_angle * (CS::new(1.0, 0.0) / r - CS::new(0.0, k))
+        g * cos_angle * (CS::new(0.0, k) - CS::new(1.0, 0.0) / r)
     }
 
     /// Compute the surface pressure from given normal velocities.
@@ -169,7 +171,11 @@ impl AcousticBEM {
         let mut rhs = vec![CS::new(0.0, 0.0); n];
         for i in 0..n {
             for (ej, &(_, _, _)) in self.elements.iter().enumerate() {
-                let elem_nodes = [self.elements[ej].0, self.elements[ej].1, self.elements[ej].2];
+                let elem_nodes = [
+                    self.elements[ej].0,
+                    self.elements[ej].1,
+                    self.elements[ej].2,
+                ];
                 let vn = v_n[ej];
                 for &node_j in &elem_nodes {
                     rhs[i] += g_mat[i][node_j] * rhs_factor * vn;
@@ -185,12 +191,7 @@ impl AcousticBEM {
     /// Compute far-field pressure at a given direction.
     ///
     /// Uses the Fraunhofer approximation (large distance).
-    pub fn far_field_pattern(
-        &self,
-        theta: Scalar,
-        phi: Scalar,
-        surface_p: &[CS],
-    ) -> CS {
+    pub fn far_field_pattern(&self, theta: Scalar, phi: Scalar, surface_p: &[CS]) -> CS {
         let k = self.wave_number();
         // Observation direction unit vector
         let ux = theta.sin() * phi.cos();
@@ -218,11 +219,7 @@ impl AcousticBEM {
 }
 
 /// Solve a complex linear system using Gaussian elimination (small BEM systems).
-fn solve_complex_bem(
-    a: &[Vec<CS>],
-    b: &[CS],
-    n: usize,
-) -> Result<Vec<CS>, String> {
+fn solve_complex_bem(a: &[Vec<CS>], b: &[CS], n: usize) -> Result<Vec<CS>, String> {
     // Augmented matrix
     let mut aug = vec![vec![CS::new(0.0, 0.0); n + 1]; n];
     for i in 0..n {
@@ -288,12 +285,18 @@ mod tests {
             Coord3D::new(-0.5, 0.5, 0.5),
         ];
         let elements = vec![
-            (0, 1, 2), (0, 2, 3), // bottom
-            (4, 5, 6), (4, 6, 7), // top
-            (0, 1, 5), (0, 5, 4), // front
-            (2, 3, 7), (2, 7, 6), // back
-            (0, 3, 7), (0, 7, 4), // left
-            (1, 2, 6), (1, 6, 5), // right
+            (0, 1, 2),
+            (0, 2, 3), // bottom
+            (4, 5, 6),
+            (4, 6, 7), // top
+            (0, 1, 5),
+            (0, 5, 4), // front
+            (2, 3, 7),
+            (2, 7, 6), // back
+            (0, 3, 7),
+            (0, 7, 4), // left
+            (1, 2, 6),
+            (1, 6, 5), // right
         ];
         AcousticBEM::new(nodes, elements, 1000.0, 343.0, 1.2)
     }
@@ -370,7 +373,9 @@ mod tests {
     fn test_surface_pressure_nonuniform() {
         let bem = make_sphere_bem();
         // Non-uniform normal velocity (piston-like)
-        let v_n: Vec<Scalar> = (0..12).map(|i| 0.01 * (1.0 + (i as Scalar / 12.0))).collect();
+        let v_n: Vec<Scalar> = (0..12)
+            .map(|i| 0.01 * (1.0 + (i as Scalar / 12.0)))
+            .collect();
         let p = bem.surface_pressure(&v_n).unwrap();
         assert_eq!(p.len(), 8);
     }

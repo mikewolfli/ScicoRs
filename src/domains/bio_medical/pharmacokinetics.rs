@@ -63,9 +63,10 @@ impl CompartmentModel {
                 }
             }
 
-            // Euler step
+            // Euler step: damounts are mass rates (mass/time), so update the
+            // amount directly (no extra volume factor).
             for i in 0..n {
-                amounts[i] += damounts[i] * dt * self.volumes[i]; // amounts[i] += rate * dt
+                amounts[i] += damounts[i] * dt;
                 if amounts[i] < 0.0 {
                     amounts[i] = 0.0;
                 }
@@ -98,10 +99,22 @@ pub struct PkPdParams {
 ///
 /// E(C) = (E_max · C^Hill) / (EC50^Hill + C^Hill)
 pub fn emax_model(concentration: Scalar, e_max: Scalar, ec50: Scalar, hill: Scalar) -> Scalar {
-    let hill_int = hill as i32;
-    let c_hill = concentration.powi(hill_int);
-    let ec50_hill = ec50.powi(hill_int);
-    (e_max * c_hill) / (ec50_hill + c_hill)
+    // Use the fractional Hill exponent directly (powf) instead of truncating
+    // to an integer, which would distort the dose-response curve.
+    let c_hill = if concentration > 0.0 {
+        concentration.powf(hill)
+    } else if hill > 0.0 {
+        0.0
+    } else {
+        f64::INFINITY
+    };
+    let ec50_hill = if ec50 > 0.0 { ec50.powf(hill) } else { 0.0 };
+    let denom = ec50_hill + c_hill;
+    if denom.is_finite() && denom > 0.0 {
+        (e_max * c_hill) / denom
+    } else {
+        0.0
+    }
 }
 
 #[cfg(test)]

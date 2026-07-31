@@ -11,59 +11,145 @@ use crate::core::types::Scalar;
 /// Multiply two matrices: C = A * B.
 ///
 /// A is m×n, B is n×p → result is m×p.
+///
+/// For non-trivial sizes this uses the pure-Rust SIMD `matrixmultiply` kernel
+/// (real acceleration, no external BLAS required); tiny problems fall back to
+/// the naive reference loop to avoid launch overhead. Results are identical.
 pub fn mat_mul(a: &[Vec<Scalar>], b: &[Vec<Scalar>]) -> Result<Vec<Vec<Scalar>>, SimError> {
     if a.is_empty() || b.is_empty() {
         return Ok(Vec::new());
     }
     let m = a.len();
-    let n = a[0].len();
-    if b.len() != n {
+    let k = a[0].len();
+    if b.len() != k {
         return Err(SimError::numerical(format!(
             "mat_mul: inner dimensions don't match: A cols={}, B rows={}",
-            n,
+            k,
             b.len()
         )));
     }
-    let p = b[0].len();
-    let mut c = vec![vec![0.0; p]; m];
+    let n = b[0].len();
+    let work = m.saturating_mul(k).saturating_mul(n);
+    if work >= SIMD_MIN_WORK {
+        Ok(mat_mul_simd(a, b, m, k, n))
+    } else {
+        Ok(mat_mul_naive(a, b, m, k, n))
+    }
+}
+
+/// Work units at which the SIMD kernel beats the naive loop (its flatten copy
+/// is O(n²), amortized by the O(n³) multiply).
+const SIMD_MIN_WORK: usize = 4096;
+
+/// Reference (naive, cache-friendly `ikj`) matrix multiply. Kept for
+/// correctness tests and benchmarks; not used on the hot path.
+pub fn mat_mul_naive(
+    a: &[Vec<Scalar>],
+    b: &[Vec<Scalar>],
+    m: usize,
+    k: usize,
+    n: usize,
+) -> Vec<Vec<Scalar>> {
+    let mut c = vec![vec![0.0; n]; m];
     for i in 0..m {
-        for k in 0..n {
-            let aik = a[i][k];
+        for kk in 0..k {
+            let aik = a[i][kk];
             if aik == 0.0 {
                 continue;
             }
-            for j in 0..p {
-                c[i][j] += aik * b[k][j];
+            for j in 0..n {
+                c[i][j] += aik * b[kk][j];
             }
         }
+    }
+    c
+}
+
+/// Pure-Rust SIMD matrix multiply via `matrixmultiply` (auto-vectorized,
+/// runtime-detected x86-64 AVX2/FMA / aarch64 NEON kernels, zero C deps).
+fn mat_mul_simd(
+    a: &[Vec<Scalar>],
+    b: &[Vec<Scalar>],
+    m: usize,
+    k: usize,
+    n: usize,
+) -> Vec<Vec<Scalar>> {
+    // Flatten into contiguous row-major buffers (the O(n³) multiply dominates
+    // the O(n²) copy).
+    let mut a_flat = Vec::with_capacity(m * k);
+    for row in a.iter().take(m) {
+        a_flat.extend_from_slice(&row[..k]);
+    }
+    let mut b_flat = Vec::with_capacity(k * n);
+    for row in b.iter().take(k) {
+        b_flat.extend_from_slice(&row[..n]);
+    }
+    let mut c_flat = vec![0.0; m * n];
+    super::simd::dgemm(m, k, n, &a_flat, &b_flat, &mut c_flat);
+    let mut c = Vec::with_capacity(m);
+    for i in 0..m {
+        c.push(c_flat[i * n..(i + 1) * n].to_vec());
+    }
+    c
+}
+
+/// Parallel SIMD matrix multiply: tiles rows across the rayon pool; each tile
+/// uses the SIMD `matrixmultiply` kernel (SIMD × multi-threading).
+pub fn mat_mul_parallel(
+    a: &[Vec<Scalar>],
+    b: &[Vec<Scalar>],
+) -> Result<Vec<Vec<Scalar>>, SimError> {
+    if a.is_empty() || b.is_empty() {
+        return Ok(Vec::new());
+    }
+    let m = a.len();
+    let k = a[0].len();
+    if b.len() != k {
+        return Err(SimError::numerical(format!(
+            "mat_mul_parallel: inner dimensions don't match: A cols={}, B rows={}",
+            k,
+            b.len()
+        )));
+    }
+    let n = b[0].len();
+    // Flatten B once (shared by all row tiles).
+    let mut b_flat = Vec::with_capacity(k * n);
+    for row in b.iter().take(k) {
+        b_flat.extend_from_slice(&row[..n]);
+    }
+    let mut c_flat = vec![0.0; m * n];
+    {
+        use rayon::prelude::*;
+        let tile = 64; // rows per SIMD tile
+        c_flat
+            .par_chunks_mut(tile * n)
+            .enumerate()
+            .for_each(|(t, c_tile)| {
+                let i0 = t * tile;
+                let rows = c_tile.len() / n;
+                let i1 = (i0 + rows).min(m);
+                // Flatten this tile's rows of A.
+                let mut a_tile = Vec::with_capacity(rows * k);
+                for row in a.iter().take(i1).skip(i0) {
+                    a_tile.extend_from_slice(&row[..k]);
+                }
+                let m_tile = rows;
+                super::simd::dgemm(m_tile, k, n, &a_tile, &b_flat, c_tile);
+            });
+    }
+    let mut c = Vec::with_capacity(m);
+    for i in 0..m {
+        c.push(c_flat[i * n..(i + 1) * n].to_vec());
     }
     Ok(c)
 }
 
 /// Multiply matrix by vector: y = A * x.
+///
+/// Delegates to the adaptive BLAS-2 `gemv` so large products benefit from
+/// rayon parallelism / a registered GPU backend.
 pub fn mat_vec_mul(a: &[Vec<Scalar>], x: &[Scalar]) -> Result<Vec<Scalar>, SimError> {
-    if a.is_empty() {
-        return Ok(Vec::new());
-    }
-    let m = a.len();
-    let n = a[0].len();
-    if x.len() != n {
-        return Err(SimError::numerical(format!(
-            "mat_vec_mul: matrix cols={}, vector len={}",
-            n,
-            x.len()
-        )));
-    }
-    let mut y = vec![0.0; m];
-    for i in 0..m {
-        let row = &a[i];
-        let mut s = 0.0;
-        for j in 0..n {
-            s += row[j] * x[j];
-        }
-        y[i] = s;
-    }
-    Ok(y)
+    super::linalg::gemv(a, x)
 }
 
 /// Transpose a matrix.
@@ -372,42 +458,12 @@ pub fn trace(a: &[Vec<Scalar>]) -> Result<Scalar, SimError> {
 ///
 /// Falls back to serial `mat_mul` if rayon is not available or the
 /// matrix is too small to benefit from parallelism.
+///
+/// This is now a thin wrapper over the adaptive dispatcher
+/// ([`crate::core::compute::backend`]) which also supports GPU dispatch
+/// once a GPU backend is registered.
 pub fn par_mat_mul(a: &[Vec<Scalar>], b: &[Vec<Scalar>]) -> Result<Vec<Vec<Scalar>>, SimError> {
-    if a.is_empty() || b.is_empty() {
-        return Ok(Vec::new());
-    }
-    let m = a.len();
-    let n = a[0].len();
-    if b.len() != n {
-        return Err(SimError::numerical(format!(
-            "par_mat_mul: inner dimensions don't match: A cols={}, B rows={}",
-            n,
-            b.len()
-        )));
-    }
-    let p = b[0].len();
-
-    // For small matrices, serial is faster
-    if m * n * p < 1000 {
-        return mat_mul(a, b);
-    }
-
-    use rayon::prelude::*;
-    let mut c = vec![vec![0.0; p]; m];
-    let a_ref = a; // borrow for closure
-    c.par_iter_mut().enumerate().for_each(|(i, row)| {
-        for k in 0..n {
-            let aik = a_ref[i][k];
-            if aik == 0.0 {
-                continue;
-            }
-            let bk = &b[k];
-            for j in 0..p {
-                row[j] += aik * bk[j];
-            }
-        }
-    });
-    Ok(c)
+    crate::core::compute::backend::adaptive_mat_mul(a, b)
 }
 
 #[cfg(test)]
@@ -423,6 +479,69 @@ mod tests {
         assert!((c[0][1] - 22.0).abs() < 1e-10);
         assert!((c[1][0] - 43.0).abs() < 1e-10);
         assert!((c[1][1] - 50.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_mat_mul_simd_matches_naive_reference() {
+        // 32×32×32 = 32768 work units, well above the SIMD threshold (4096),
+        // so `mat_mul` exercises the SIMD kernel; must equal the naive
+        // reference within float tolerance.
+        let a: Vec<Vec<Scalar>> = (0..32)
+            .map(|i| {
+                (0..32)
+                    .map(|j| ((i * 13 + j * 5) as Scalar) * 0.75)
+                    .collect()
+            })
+            .collect();
+        let b: Vec<Vec<Scalar>> = (0..32)
+            .map(|i| {
+                (0..32)
+                    .map(|j| ((i * 3 - j * 7) as Scalar) * -0.4)
+                    .collect()
+            })
+            .collect();
+        let want = mat_mul_naive(&a, &b, 32, 32, 32);
+        let got = mat_mul(&a, &b).unwrap();
+        for i in 0..32 {
+            for j in 0..32 {
+                assert!(
+                    (got[i][j] - want[i][j]).abs() < 1e-9,
+                    "SIMD mismatch at ({i},{j}): {} vs {}",
+                    got[i][j],
+                    want[i][j]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_mat_mul_parallel_matches_naive_reference() {
+        let a: Vec<Vec<Scalar>> = (0..40)
+            .map(|i| {
+                (0..24)
+                    .map(|j| ((i * 11 - j * 3) as Scalar) * 0.5)
+                    .collect()
+            })
+            .collect();
+        let b: Vec<Vec<Scalar>> = (0..24)
+            .map(|i| {
+                (0..36)
+                    .map(|j| ((i * 7 + j * 2) as Scalar) * 0.25)
+                    .collect()
+            })
+            .collect();
+        let want = mat_mul_naive(&a, &b, 40, 24, 36);
+        let got = mat_mul_parallel(&a, &b).unwrap();
+        for i in 0..40 {
+            for j in 0..36 {
+                assert!(
+                    (got[i][j] - want[i][j]).abs() < 1e-9,
+                    "parallel mismatch at ({i},{j}): {} vs {}",
+                    got[i][j],
+                    want[i][j]
+                );
+            }
+        }
     }
 
     #[test]

@@ -16,11 +16,13 @@ impl DabConverter {
         Self { vin, vout, inductance, fs, phase_shift: 0.0 }
     }
     pub fn power_flow(&self) -> Scalar {
-        let d = (self.phase_shift / PI).clamp(-0.5, 0.5);
-        self.vin * self.vout * d * (1.0 - 2.0 * d.abs()) / (2.0 * self.inductance * self.fs).max(1e-30)
+        // Canonical DAB power transfer: P = Vin·Vout·d·(1 − |d|) / (2·L·fs)
+        // with d = φ/π ∈ [−1, 1]. Maximum power occurs at |d| = 0.5.
+        let d = (self.phase_shift / PI).clamp(-1.0, 1.0);
+        self.vin * self.vout * d * (1.0 - d.abs()) / (2.0 * self.inductance * self.fs).max(1e-30)
     }
     pub fn zvs_condition(&self) -> bool {
-        let d = (self.phase_shift / PI).clamp(-0.5, 0.5);
+        let d = (self.phase_shift / PI).clamp(-1.0, 1.0);
         (self.vin - self.vout * (2.0 * d - 1.0)).abs() < self.vin * 0.1
     }
 }

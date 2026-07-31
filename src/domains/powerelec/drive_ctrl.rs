@@ -75,8 +75,22 @@ pub fn drive_efficiency(input_power: Scalar, output_power: Scalar, motor_loss: S
 }
 
 /// Torque-speed curve for a motor type.
-pub fn torque_speed_curve(_motor_type: &str, _params: &[Scalar], _v_dc: Scalar) -> Vec<(Scalar, Scalar)> {
-    vec![(0.0, 10.0), (100.0, 9.0), (200.0, 8.0), (300.0, 7.0), (400.0, 5.0)]
+///
+/// Linear DC-motor model: `T(ω) = T_stall · (1 − ω/ω_max)`. `params` is
+/// `[stall_torque (N·m), no_load_speed (rad/s)]`; the no-load speed scales
+/// with the bus voltage `v_dc` (relative to a 100 V reference).
+pub fn torque_speed_curve(_motor_type: &str, params: &[Scalar], v_dc: Scalar) -> Vec<(Scalar, Scalar)> {
+    let stall = params.first().copied().unwrap_or(10.0).max(0.0);
+    let no_load = params.get(1).copied().unwrap_or(300.0).max(0.0);
+    let speed_scale = if v_dc > 0.0 { (v_dc / 100.0).max(0.0) } else { 1.0 };
+    let omega_max = (no_load * speed_scale).max(1e-6);
+    (0..=10)
+        .map(|i| {
+            let omega = omega_max * i as Scalar / 10.0;
+            let torque = stall * (1.0 - omega / omega_max).max(0.0);
+            (omega, torque)
+        })
+        .collect()
 }
 
 #[cfg(test)]

@@ -111,7 +111,10 @@ impl RefractiveIndex for SellmeierModel {
     }
 }
 
-/// Fused silica (SiO₂) Sellmeier model.
+/// Fused silica (SiO₂) Sellmeier model (Malitson 1965).
+///
+/// The published table lists characteristic wavelengths λᵢ; the Sellmeier
+/// denominator uses Cᵢ = λᵢ², so the values are squared here.
 pub fn fused_silica() -> SellmeierModel {
     SellmeierModel {
         coefficients: vec![

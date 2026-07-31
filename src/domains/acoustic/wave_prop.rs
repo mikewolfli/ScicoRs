@@ -39,22 +39,27 @@ pub fn spherical_spreading(r: Scalar, r_ref: Scalar) -> Scalar {
     -20.0 * (r / r_ref).log10()
 }
 
-/// Air absorption attenuation coefficient (dB/m) per ISO 9613-1.
+/// Air absorption attenuation coefficient (dB/m) — ISO 9613-1 relaxation model.
 ///
-/// Simplified model for common temperature and humidity.
+/// The relaxation terms use Debye resonance lineshapes `(f/f_r)/(1 + (f/f_r)²)`
+/// (which peak at the relaxation frequency and decay on both sides), with the
+/// standard nitrogen/oxygen Boltzmann temperature factors `e^(−2239.1/T)` and
+/// `e^(−3352/T)`. A simplified model for common temperature/humidity ranges.
 pub fn air_attenuation_coefficient(freq: Scalar, temp_c: Scalar, humidity_pct: Scalar) -> Scalar {
-    // Simplified from ISO 9613-1
+    // ISO 9613-1: α = f²·{1.84e-11·(T/T0)^0.5
+    //   + (T/T0)^−2.5·[0.01275·e^(−2239.1/T)·(f_rN/f + f/f_rN)⁻¹
+    //                + 0.1068·e^(−3352/T)·(f_rO/f + f/f_rO)⁻¹]}
     let t_kelvin = temp_c + 273.15;
     let t_ratio = t_kelvin / 293.15;
     let p_sat = 10.0_f64.powf(8.07131 - 1730.63 / (233.426 + temp_c)); // mmHg
-    let h = humidity_pct * p_sat / 760.0; // mole fraction
+    let h = humidity_pct * p_sat / 760.0; // mole fraction of water vapour
     let frn = (t_ratio.sqrt()) * (24.0 + 4.04e4 * h * (0.02 + h) / (0.391 + h));
     let fro = (t_ratio.sqrt()) * (9.0 + 280.0 * h * (-4.17 * (t_ratio - 1.0)).exp());
     let freq_sq = freq * freq;
-    1.0e-3
-        * freq_sq
-        * (1.562 * (frn / freq).powi(-2).exp() / (frn + freq_sq / frn)
-            + 0.148 * (fro / freq).powi(-2).exp() / (fro + freq_sq / fro))
+    // Debye relaxation resonance: (f/f_r)/(1 + (f/f_r)²) = f·f_r/(f² + f_r²).
+    let term_n = 0.01275 * (-2239.1 / t_kelvin).exp() * (freq * frn / (freq_sq + frn * frn));
+    let term_o = 0.1068 * (-3352.0 / t_kelvin).exp() * (freq * fro / (freq_sq + fro * fro));
+    freq_sq * (1.84e-11 * t_ratio.sqrt() + t_ratio.powf(-2.5) * (term_n + term_o))
 }
 
 /// SPL at distance r from reference distance r_ref.

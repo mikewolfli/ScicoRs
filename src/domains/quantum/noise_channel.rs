@@ -41,7 +41,9 @@ impl NoiseChannel {
         match self {
             Self::Depolarizing { p } => {
                 let p = *p;
-                assert!((0.0..=1.0).contains(&p), "p must be in [0,1]");
+                if !(0.0..=1.0).contains(&p) {
+                    return Err("p must be in [0,1]".to_string());
+                }
                 let mut result = vec![vec![ComplexScalar::new(0.0, 0.0); 2]; 2];
                 // (1-p)·ρ + p·I/2
                 let p_over_2 = p / 2.0;
@@ -55,7 +57,9 @@ impl NoiseChannel {
             }
             Self::AmplitudeDamping { gamma } => {
                 let gamma = *gamma;
-                assert!((0.0..=1.0).contains(&gamma), "gamma must be in [0,1]");
+                if !(0.0..=1.0).contains(&gamma) {
+                    return Err("gamma must be in [0,1]".to_string());
+                }
                 // Kraus operators:
                 // K0 = [[1, 0], [0, √(1-γ)]], K1 = [[0, √γ], [0, 0]]
                 let sqrt_1g = (1.0 - gamma).sqrt();
@@ -73,7 +77,9 @@ impl NoiseChannel {
             }
             Self::PhaseDamping { gamma } => {
                 let gamma = *gamma;
-                assert!((0.0..=1.0).contains(&gamma), "gamma must be in [0,1]");
+                if !(0.0..=1.0).contains(&gamma) {
+                    return Err("gamma must be in [0,1]".to_string());
+                }
                 let lambda = 1.0 - gamma;
                 let mut result = rho.clone();
                 // Off-diagonal damping
@@ -83,7 +89,9 @@ impl NoiseChannel {
             }
             Self::BitFlip { p } => {
                 let p = *p;
-                assert!((0.0..=1.0).contains(&p), "p must be in [0,1]");
+                if !(0.0..=1.0).contains(&p) {
+                    return Err("p must be in [0,1]".to_string());
+                }
                 // ρ → (1-p)ρ + p·X·ρ·X
                 let mut result = vec![vec![ComplexScalar::new(0.0, 0.0); 2]; 2];
                 result[0][0] = ComplexScalar::new((1.0 - p) * rho[0][0].re + p * rho[1][1].re, 0.0);
@@ -100,7 +108,9 @@ impl NoiseChannel {
             }
             Self::PhaseFlip { p } => {
                 let p = *p;
-                assert!((0.0..=1.0).contains(&p), "p must be in [0,1]");
+                if !(0.0..=1.0).contains(&p) {
+                    return Err("p must be in [0,1]".to_string());
+                }
                 // ρ → (1-p)ρ + p·Z·ρ·Z
                 // Z·ρ·Z leaves diagonals unchanged, flips sign of off-diagonals
                 let mut result = vec![vec![ComplexScalar::new(0.0, 0.0); 2]; 2];

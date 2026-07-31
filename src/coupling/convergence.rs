@@ -99,13 +99,42 @@ impl CouplingScheduler {
         Ok(())
     }
 
+    /// Parallel Jacobi coupling: iterates sweeps until convergence.
+    ///
+    /// Each sweep computes all field updates from the previous state in
+    /// parallel (true Jacobi semantics), then checks convergence against
+    /// `self.criteria` (with the configured relaxation factor applied to the
+    /// updates). Returns the converged field set.
     pub fn jacobi_coupling(
         &self,
         fields: &[FieldData],
         compute_fn: &(dyn Fn(&FieldData) -> Result<FieldData, String> + Send + Sync),
     ) -> Result<Vec<FieldData>, String> {
         use rayon::prelude::*;
-        fields.par_iter().map(compute_fn).collect()
+        let mut current = fields.to_vec();
+        let relaxation = self.criteria.relaxation_factor;
+        for _iter in 0..self.criteria.max_iterations {
+            let updated: Vec<FieldData> = current
+                .par_iter()
+                .map(compute_fn)
+                .collect::<Result<_, _>>()?;
+            let mut max_delta: Scalar = 0.0;
+            for (u, c) in updated.iter().zip(current.iter()) {
+                for (nu, nc) in u.values.iter().zip(c.values.iter()) {
+                    max_delta = max_delta.max((nu - nc).abs());
+                }
+            }
+            // Apply relaxation: current = (1−ω)·current + ω·updated.
+            for (u, c) in updated.iter().zip(current.iter_mut()) {
+                for (nu, nc) in u.values.iter().zip(c.values.iter_mut()) {
+                    *nc = (1.0 - relaxation) * *nc + relaxation * *nu;
+                }
+            }
+            if self.check_convergence(&[max_delta]) {
+                break;
+            }
+        }
+        Ok(current)
     }
 
     pub fn check_convergence(&self, delta: &[Scalar]) -> bool {

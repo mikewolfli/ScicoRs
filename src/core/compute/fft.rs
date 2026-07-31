@@ -18,15 +18,23 @@ pub fn fft(data: &mut [Scalar]) -> Result<(), String> {
         return Err("Data length must be 2 * n (interleaved complex)".to_string());
     }
 
-    // Bit-reversal permutation
+    // Bit-reversal permutation (standard radix-2 DIT pre-processing).
+    // For each i, j is the bit-reversal of i; the increment carries through
+    // the lower bits with an inner loop instead of XORing a constant, and the
+    // loop starts at i=1 (i=0 always maps j to n/2, which would corrupt the
+    // permutation with an extra swap).
     let mut j = 0;
-    for i in 0..n - 1 {
-        let bit = n >> 1;
+    for i in 1..n {
+        let mut bit = n >> 1;
+        while j & bit != 0 {
+            j ^= bit;
+            bit >>= 1;
+        }
+        j ^= bit;
         if i < j {
             data.swap(2 * i, 2 * j);
             data.swap(2 * i + 1, 2 * j + 1);
         }
-        j ^= bit;
     }
 
     // Cooley-Tukey radix-2 DIT
@@ -159,5 +167,82 @@ mod tests {
         let signal = vec![1.0; 8];
         let (_, mags) = power_spectrum(&signal).unwrap();
         assert!((mags[0] - 1.0).abs() < 1e-10);
+    }
+
+    /// Verify the FFT against a direct O(n²) DFT. This catches bit-reversal
+    /// and twiddle-factor errors that a round-trip (forward+inverse sharing
+    /// the same permutation) would mask.
+    #[test]
+    fn test_fft_matches_direct_dft() {
+        let n = 16;
+        let x: Vec<Scalar> = (0..n)
+            .map(|i| {
+                (3.0 * std::f64::consts::PI * i as Scalar / n as Scalar).sin()
+                    + 0.5 * (i as Scalar).cos()
+            })
+            .collect();
+        let mut data = Vec::with_capacity(2 * n);
+        for &v in &x {
+            data.push(v);
+            data.push(0.0);
+        }
+
+        fft(&mut data).unwrap();
+
+        // Direct DFT for reference.
+        for k in 0..n {
+            let mut re = 0.0;
+            let mut im = 0.0;
+            for i in 0..n {
+                let angle = -2.0 * std::f64::consts::PI * k as Scalar * i as Scalar / n as Scalar;
+                re += x[i] * angle.cos();
+                im += x[i] * angle.sin();
+            }
+            assert!(
+                (data[2 * k] - re).abs() < 1e-9,
+                "bin {} real: FFT {} vs DFT {}",
+                k,
+                data[2 * k],
+                re
+            );
+            assert!(
+                (data[2 * k + 1] - im).abs() < 1e-9,
+                "bin {} imag: FFT {} vs DFT {}",
+                k,
+                data[2 * k + 1],
+                im
+            );
+        }
+    }
+
+    /// An 8-point impulse should produce an all-ones spectrum.
+    #[test]
+    fn test_fft_impulse_spectrum() {
+        let mut data = vec![
+            1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        ];
+        fft(&mut data).unwrap();
+        for k in 0..4 {
+            assert!((data[2 * k] - 1.0).abs() < 1e-10, "bin {} should be 1.0", k);
+            assert!(data[2 * k + 1].abs() < 1e-10);
+        }
+    }
+
+    /// The sine power-spectrum peak should be exactly at magnitude ~0.5
+    /// (one-sided, amplitude 1 → magnitude n/2 → /n*2 = 1... for a real sine
+    /// of amplitude A the one-sided peak is A).
+    #[test]
+    fn test_power_spectrum_sine_exact() {
+        let n = 16;
+        let signal: Vec<Scalar> = (0..n)
+            .map(|i| 2.0 * (2.0 * std::f64::consts::PI * 2.0 * i as Scalar / n as Scalar).sin())
+            .collect();
+        let (_, mags) = power_spectrum(&signal).unwrap();
+        // Frequency bin 2, amplitude 2.0 → one-sided peak = 2.0.
+        assert!((mags[2] - 2.0).abs() < 1e-9);
+        // All other bins (excluding DC and the mirror) should be ~0.
+        for k in (1..n / 2).filter(|&k| k != 2) {
+            assert!(mags[k] < 1e-9, "bin {} should be ~0, got {}", k, mags[k]);
+        }
     }
 }

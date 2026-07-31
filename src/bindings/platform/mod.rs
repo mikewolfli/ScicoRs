@@ -38,9 +38,31 @@ impl DynamicLibrary {
     }
 
     pub fn load_symbol<T>(&self, name: &str) -> Result<*mut T, String> {
-        let _ = name;
-        // Platform-specific loading would go here
-        Err("Dynamic loading not implemented in this context".to_string())
+        // Verify the file is a recognised shared-library format by inspecting
+        // its magic bytes, so we can give a precise diagnostic rather than a
+        // generic failure.
+        let bytes = std::fs::read(&self.path).map_err(|e| format!("read error: {}", e))?;
+        let is_elf = bytes.starts_with(&[0x7f, b'E', b'L', b'F']);
+        let is_macho = bytes.starts_with(&[0xfe, 0xed, 0xfa, 0xce])
+            || bytes.starts_with(&[0xfe, 0xed, 0xfa, 0xcf])
+            || bytes.starts_with(&[0xcf, 0xfa, 0xed, 0xfe]);
+        let is_pe = bytes.starts_with(b"MZ");
+        if !is_elf && !is_macho && !is_pe {
+            return Err(format!(
+                "'{}' is not a recognised shared-library format",
+                self.path
+            ));
+        }
+        if name.is_empty() {
+            return Err("symbol name is empty".to_string());
+        }
+        // Resolving a symbol requires an unsafe FFI loader (dlopen /
+        // LoadLibrary). This crate intentionally stays `unsafe`-free, so the
+        // caller must provide their own FFI loader for the returned address.
+        Err(format!(
+            "symbol '{}' not resolved: this safe crate cannot dlopen; use a libloading-style FFI loader",
+            name
+        ))
     }
 }
 

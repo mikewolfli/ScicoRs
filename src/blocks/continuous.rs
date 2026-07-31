@@ -98,6 +98,15 @@ impl Block for Integrator {
         sd.add_continuous(ContinuousStateVar::new("x", self.initial));
         sd
     }
+    fn read_state(&self) -> Vec<Scalar> {
+        vec![self.state]
+    }
+    fn write_state(&mut self, state: &[Scalar]) -> Result<(), SimError> {
+        if let Some(&s) = state.first() {
+            self.state = s.clamp(self.min, self.max);
+        }
+        Ok(())
+    }
     fn init(&mut self) -> Result<(), SimError> {
         self.state = self.initial;
         self.status = ComponentStatus::Ready;
@@ -229,6 +238,14 @@ impl Block for PIDController {
     fn time(&self) -> Time {
         self.current_time
     }
+    fn set_step(&mut self, dt: Scalar) {
+        if dt.is_finite() && dt > 0.0 {
+            self.dt = dt;
+        }
+    }
+    fn has_output_side_effects(&self) -> bool {
+        true // accumulates the integral term inside output()
+    }
     fn init(&mut self) -> Result<(), SimError> {
         self.integral = 0.0;
         self.initialized = false;
@@ -261,11 +278,27 @@ impl Block for PIDController {
         // Integral term with anti-windup (clamp integration when saturated)
         if self.ki.abs() > 1e-15 {
             self.integral += error * self.dt;
-            // Clamp integral for anti-windup
+            // Anti-windup via conditional integration (back-calculation):
+            // if the unsaturated output would exceed the limits, undo the
+            // integral contribution that drives it into saturation so the
+            // controller unwinds correctly.
             let i_raw = self.ki * self.integral;
             let y_test = p_term + i_raw;
             if y_test > self.max || y_test < self.min {
-                // Back-calculate: remove the contribution that causes saturation
+                let limit = if y_test > self.max {
+                    self.max
+                } else {
+                    self.min
+                };
+                // Keep the proportional (and derivative) part, set the
+                // integral term to exactly cancel the excess.
+                let d_raw = if self.dt > 1e-15 {
+                    self.kd * (error - self.prev_error) / self.dt
+                } else {
+                    0.0
+                };
+                let i_target = (limit - p_term - d_raw).clamp(self.min, self.max);
+                self.integral = i_target / self.ki;
             }
         }
         let i_term = self.ki * self.integral;
@@ -390,6 +423,15 @@ impl Block for TransferFunction {
             sd.add_continuous(ContinuousStateVar::new(&format!("x{}", i), 0.0));
         }
         sd
+    }
+    fn read_state(&self) -> Vec<Scalar> {
+        self.state.clone()
+    }
+    fn write_state(&mut self, state: &[Scalar]) -> Result<(), SimError> {
+        let n = self.state.len();
+        let len = state.len().min(n);
+        self.state[..len].copy_from_slice(&state[..len]);
+        Ok(())
     }
     fn init(&mut self) -> Result<(), SimError> {
         self.state = vec![0.0; self.state.len()];
@@ -557,6 +599,15 @@ impl Block for StateSpaceSystem {
             sd.add_continuous(ContinuousStateVar::new(&format!("x{}", i), 0.0));
         }
         sd
+    }
+    fn read_state(&self) -> Vec<Scalar> {
+        self.x.clone()
+    }
+    fn write_state(&mut self, state: &[Scalar]) -> Result<(), SimError> {
+        let n = self.x.len();
+        let len = state.len().min(n);
+        self.x[..len].copy_from_slice(&state[..len]);
+        Ok(())
     }
     fn init(&mut self) -> Result<(), SimError> {
         self.x = vec![0.0; self.a.len()];

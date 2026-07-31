@@ -17,16 +17,25 @@ impl CatalyticReactor {
         Self { length, diameter, epsilon, rho_cat, deactivation_rate: deact_rate, activity: vec![1.0; n_points] }
     }
 
-    pub fn profile(&self, inlet: &[Scalar], _kinetics: &ReactionKinetics, _t: Scalar) -> Result<Vec<Vec<Scalar>>, String> {
-        let n = self.activity.len();
-        let dz = self.length / n.max(1) as Scalar;
+    pub fn profile(&self, inlet: &[Scalar], kinetics: &ReactionKinetics, t: Scalar) -> Result<Vec<Vec<Scalar>>, String> {
+        let n = self.activity.len().max(2);
+        let dz = self.length / n as Scalar;
         let mut profiles = vec![vec![0.0; inlet.len()]; n];
-        if n > 0 { profiles[0].copy_from_slice(inlet); }
+        profiles[0].copy_from_slice(inlet);
+        let mut conc = inlet.to_vec();
         for i in 1..n {
-            let deact = (-self.deactivation_rate * i as Scalar * dz).exp();
-            for j in 0..inlet.len() {
-                profiles[i][j] = profiles[i - 1][j] * deact;
+            // Catalyst activity decays exponentially with bed depth.
+            let z = i as Scalar * dz;
+            let activity = (-self.deactivation_rate * z).exp().max(0.0);
+            let derivs = kinetics.concentration_derivatives(&conc, t);
+            for j in 0..conc.len() {
+                // Reaction rate scaled by local catalyst activity.
+                conc[j] += derivs[j] * activity * dz;
+                if conc[j] < 0.0 {
+                    conc[j] = 0.0;
+                }
             }
+            profiles[i].copy_from_slice(&conc);
         }
         Ok(profiles)
     }
@@ -44,8 +53,12 @@ mod tests {
     #[test]
     fn test_profile() {
         let r = CatalyticReactor::new(1.0, 0.1, 0.4, 2000.0, 0.01, 5);
-        let kin = ReactionKinetics::new(vec![1.0], vec![vec![-1.0]]);
-        let p = r.profile(&[1.0, 0.5], &kin, 300.0).unwrap();
+        // A → B with k = 1.0, consistent with the 2-species inlet.
+        let kin = ReactionKinetics::new(vec![1.0], vec![vec![-1.0, 1.0]]);
+        let p = r.profile(&[1.0, 0.0], &kin, 300.0).unwrap();
         assert_eq!(p.len(), 5);
+        // Reactant is consumed along the bed; product is formed.
+        assert!(p[4][0] < p[0][0]);
+        assert!(p[4][1] > p[0][1]);
     }
 }

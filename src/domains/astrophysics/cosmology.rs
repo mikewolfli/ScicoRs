@@ -17,8 +17,12 @@ pub fn hubble_parameter(redshift: Scalar, h0: Scalar, omega_m: Scalar, omega_l: 
 }
 
 /// Comoving distance (Mpc) in ΛCDM — simplified numerical integration.
+///
+/// d_C = (c/H₀)·∫₀ᶻ dz'/E(z'), where `dist = ∫ dz'/H(z')` already carries the
+/// `1/H₀` factor (H(z') = H₀·E(z')). The result is therefore `c·dist` in Mpc
+/// (with c in km/s and H₀ in km/s/Mpc) — no extra division is needed.
 pub fn comoving_distance(redshift: Scalar, h0: Scalar, omega_m: Scalar, omega_l: Scalar) -> Scalar {
-    let h0_ms = h0 / (3.085677581e19 / 1e6); // km/s/Mpc → 1/Mpc
+    let _h0 = h0; // H₀ is embedded in dist via hubble_parameter
     let steps = 1000;
     let dz = redshift / steps as Scalar;
     let mut dist = 0.0;
@@ -28,7 +32,7 @@ pub fn comoving_distance(redshift: Scalar, h0: Scalar, omega_m: Scalar, omega_l:
         dist += dz / hz;
     }
     let c_ms = 299792.458; // km/s
-    c_ms * dist / h0_ms
+    c_ms * dist
 }
 
 /// Luminosity distance (Mpc): d_L = (1+z) * d_C.
@@ -48,7 +52,8 @@ pub fn universe_age(h0: Scalar, omega_m: Scalar, omega_l: Scalar) -> Scalar {
         let hz = hubble_parameter(z, h0, omega_m, omega_l);
         integral += dz / (hz * (1.0 + z));
     }
-    let h0_s = h0 * 1000.0 / (3.085677581e19); // km/s/Mpc → 1/s
+    // H₀ in 1/s: 1 Mpc = 3.085677581e19 km, so 1/s = h0 [km/s/Mpc] / 3.0857e19.
+    let h0_s = h0 / (3.085677581e19); // km/s/Mpc → 1/s
     let age_s = integral / h0_s;
     age_s / (3.15576e16) // seconds → Gyr
 }

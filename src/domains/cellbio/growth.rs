@@ -100,10 +100,12 @@ impl GridModel {
             y as Scalar * self.dx,
             z as Scalar * self.dx,
         );
+        let first_idx = population.cells.len();
         population.seed(n, pos, 7.5e-6);
 
-        // Mark grid cell as occupied
-        self.grid[x][y][z].cell_occupant = Some(0); // placeholder
+        // Record the actual first seeded cell ID in the grid cell, enabling
+        // occupancy-based checks (e.g. contact inhibition) to use real data.
+        self.grid[x][y][z].cell_occupant = population.cells.get(first_idx).map(|c| c.id);
     }
 
     /// Diffusion update using explicit Euler + central difference.

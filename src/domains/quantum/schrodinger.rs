@@ -161,17 +161,29 @@ impl StationarySolver {
             v = new_v;
         }
 
-        // Rayleigh quotient at final iteration
-        let mut v_h_v = ComplexScalar::new(0.0, 0.0);
-        let mut v_h = ComplexScalar::new(0.0, 0.0);
-        for i in 0..v.len() {
-            v_h_v += v[i].conj() * v[i]; // simplified: v as eigenvector approx
-            v_h += v[i].conj() * v[i];
+        // Rayleigh quotient at final iteration: recompute H·v explicitly
+        // (the previous code computed v†·v/v†·v = 1.0 at max-iter exit).
+        let mut hv = vec![ComplexScalar::new(0.0, 0.0); n];
+        for i in 0..n {
+            let mut s = ComplexScalar::new(0.0, 0.0);
+            for j in 0..n {
+                s += h[i][j] * v[j];
+            }
+            hv[i] = s;
         }
-        Some((v_h_v.re / v_h.re, v))
+        let mut num = ComplexScalar::new(0.0, 0.0);
+        let mut den = ComplexScalar::new(0.0, 0.0);
+        for i in 0..n {
+            num += v[i].conj() * hv[i];
+            den += v[i].conj() * v[i];
+        }
+        Some(((num / den).re, v))
     }
 
-    /// Jacobi method for finding multiple eigenvalues/eigenvectors (simplified).
+    /// Jacobi method for finding multiple eigenvalues/eigenvectors via
+    /// power iteration with explicit deflation: after each eigenpair
+    /// `(λ, v)`, the working matrix is updated as `H ← H − λ·v·v†` so the
+    /// next power iteration converges to a different eigenpair.
     pub fn jacobi_method(
         h: &[Vec<ComplexScalar>],
         num_eigenvalues: usize,
@@ -183,17 +195,19 @@ impl StationarySolver {
 
         let mut eigenvalues = Vec::new();
         let mut eigenvectors = Vec::new();
+        let mut h_work = h.to_vec();
 
-        // Deflation: find eigenvalues one by one
-        let h_work = h.to_vec();
         for _ in 0..num_eigenvalues {
-            let result = Self::power_iteration(&h_work, 1000, 1e-10);
-            match result {
-                Some((eig, _)) => {
+            match Self::power_iteration(&h_work, 1000, 1e-10) {
+                Some((eig, v)) => {
                     eigenvalues.push(eig);
-                    // Deflate: H ← H - λ·v·v†
-                    // (Simplified: just use power iteration on a modified matrix)
-                    eigenvectors.push(vec![ComplexScalar::new(0.0, 0.0); n]);
+                    // Deflate the found eigenpair out of the working matrix.
+                    for i in 0..n {
+                        for j in 0..n {
+                            h_work[i][j] -= ComplexScalar::new(eig, 0.0) * v[i] * v[j].conj();
+                        }
+                    }
+                    eigenvectors.push(v);
                 }
                 None => break,
             }
@@ -235,8 +249,10 @@ fn hermite_polynomial(n: usize, x: Scalar) -> Scalar {
         _ => {
             let mut h0 = 1.0;
             let mut h1 = 2.0 * x;
-            for _ in 2..=n {
-                let h2 = 2.0 * x * h1 - 2.0 * (n as Scalar - 1.0) * h0;
+            // H_k = 2x·H_{k-1} − 2(k−1)·H_{k-2}; use the running index k,
+            // not the target order n, in the recurrence coefficient.
+            for k in 2..=n {
+                let h2 = 2.0 * x * h1 - 2.0 * (k as Scalar - 1.0) * h0;
                 h0 = h1;
                 h1 = h2;
             }

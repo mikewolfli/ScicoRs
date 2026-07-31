@@ -60,6 +60,44 @@ pub trait Block: Send + Sync {
         StateDeclaration::new()
     }
 
+    /// Read the current continuous state values into a flat vector.
+    ///
+    /// The order and length must match `state_declaration().continuous`.
+    /// The engine uses this to seed its unified state vector before
+    /// integration. Default: no engine-managed continuous state (empty).
+    fn read_state(&self) -> Vec<Scalar> {
+        Vec::new()
+    }
+
+    /// Write continuous state values into the block's internal state.
+    ///
+    /// `state` has length `state_declaration().continuous_count()` and holds
+    /// the solver's candidate/integrated state vector. The block must apply
+    /// any internal limits. Default: no-op for blocks that keep their state
+    /// entirely within the engine-managed vector.
+    fn write_state(&mut self, state: &[Scalar]) -> Result<(), SimError> {
+        let _ = state;
+        Ok(())
+    }
+
+    /// Set the simulation step size used by the engine.
+    ///
+    /// Called once per step before `output()`. Blocks that perform their own
+    /// discrete integration (e.g. PID controllers) use this to keep their
+    /// internal `dt` in sync with the engine. Default: no-op.
+    fn set_step(&mut self, _dt: Scalar) {}
+
+    /// Whether `output()` mutates internal state beyond writing output ports.
+    ///
+    /// Multi-stage ODE solvers re-evaluate the network at intermediate times
+    /// and states; blocks with output side effects (recorders, controllers
+    /// that accumulate integrals inside `output()`) must not be re-run. Such
+    /// blocks keep the step-start output during stage evaluations. Default:
+    /// `false` (output is a pure function of state + inputs + time).
+    fn has_output_side_effects(&self) -> bool {
+        false
+    }
+
     /// Return the block's dependency declarations (optional, default empty).
     fn dependencies(&self) -> DependencySet {
         DependencySet::new()

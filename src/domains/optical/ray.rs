@@ -73,6 +73,11 @@ pub trait OpticalElement: Send + Sync {
     fn transmit(&self, ray: &mut Ray, hit: &Coord3D) -> Result<(), String>;
     /// Reflect ray off the element at the given hit point.
     fn reflect(&self, ray: &mut Ray, hit: &Coord3D) -> Result<(), String>;
+    /// Paraxial ABCD matrix of this element (ray-vector convention
+    /// [y, θ]ᵀ → M·[y, θ]ᵀ). Returns `None` if no closed-form matrix exists.
+    fn abcd(&self) -> Option<[[Scalar; 2]; 2]> {
+        None
+    }
 }
 
 /// Flat mirror: reflects rays with θ_out = θ_in.
@@ -144,6 +149,11 @@ impl OpticalElement for FlatMirror {
             ray.direction.z - 2.0 * dot * self.normal.z,
         );
         Ok(())
+    }
+
+    fn abcd(&self) -> Option<[[Scalar; 2]; 2]> {
+        // Flat mirror: no optical power in paraxial approximation.
+        Some([[1.0, 0.0], [0.0, 1.0]])
     }
 }
 
@@ -225,6 +235,14 @@ impl OpticalElement for SphericalMirror {
             ray.direction.z - 2.0 * dot * nnz,
         );
         Ok(())
+    }
+
+    fn abcd(&self) -> Option<[[Scalar; 2]; 2]> {
+        // Curved mirror with radius R: power Φ = 2/R.
+        if self.radius.abs() < 1e-30 {
+            return Some([[1.0, 0.0], [0.0, 1.0]]);
+        }
+        Some([[1.0, 0.0], [-2.0 / self.radius, 1.0]])
     }
 }
 
@@ -335,6 +353,14 @@ impl OpticalElement for ThinLens {
     fn reflect(&self, _ray: &mut Ray, _hit: &Coord3D) -> Result<(), String> {
         Err("ThinLens does not reflect (anti-reflective coating assumed)".to_string())
     }
+
+    fn abcd(&self) -> Option<[[Scalar; 2]; 2]> {
+        // Thin lens: power Φ = 1/f.
+        if self.focal_length.abs() < 1e-30 {
+            return None;
+        }
+        Some([[1.0, 0.0], [-1.0 / self.focal_length, 1.0]])
+    }
 }
 
 /// Flat dielectric interface: Snell's law refraction.
@@ -423,6 +449,11 @@ impl OpticalElement for FlatInterface {
         );
         Ok(())
     }
+
+    fn abcd(&self) -> Option<[[Scalar; 2]; 2]> {
+        // Plane interface: angle scales by n1/n2, position unchanged.
+        Some([[1.0, 0.0], [0.0, self.n1 / self.n2]])
+    }
 }
 
 /// Aperture stop: circular hole that limits ray bundle.
@@ -492,6 +523,11 @@ impl OpticalElement for Aperture {
     fn reflect(&self, _ray: &mut Ray, _hit: &Coord3D) -> Result<(), String> {
         Err("Aperture does not reflect".to_string())
     }
+
+    fn abcd(&self) -> Option<[[Scalar; 2]; 2]> {
+        // Aperture: no optical power.
+        Some([[1.0, 0.0], [0.0, 1.0]])
+    }
 }
 
 /// Sequential imaging system: traces rays through ordered elements.
@@ -555,12 +591,18 @@ impl ImagingSystem {
     }
 
     /// Paraxial ABCD matrix of the system for a given wavelength.
+    ///
+    /// Composes the per-element ABCD matrices in ray-propagation order
+    /// (result = M_n·…·M_2·M_1). Elements without a closed-form matrix are
+    /// skipped. Note: the 3D element model does not store inter-element
+    /// distances, so free-space propagation between elements is not included;
+    /// this is a thin-optics approximation.
     pub fn paraxial_matrix(&self, _wavelength: Scalar) -> [[Scalar; 2]; 2] {
-        let m: [[Scalar; 2]; 2] = [[1.0, 0.0], [0.0, 1.0]];
-        // Sequential approximation: multiply ABCD matrices
-        for _element in &self.elements {
-            // Currently simplified: thin lens + free space decomposition
-            // Full implementation would categorize each element
+        let mut m: [[Scalar; 2]; 2] = [[1.0, 0.0], [0.0, 1.0]];
+        for element in &self.elements {
+            if let Some(em) = element.abcd() {
+                m = abcd_multiply(m, em);
+            }
         }
         m
     }
@@ -605,8 +647,11 @@ pub fn abcd_thin_lens(f: Scalar) -> [[Scalar; 2]; 2] {
 }
 
 /// Compute ABCD matrix for spherical refraction at radius R.
+///
+/// Power Φ = (n2 − n1)/R (positive R = centre on transmission side):
+/// `M = [[1, 0], [−(n2−n1)/(n2·R), n1/n2]]`.
 pub fn abcd_spherical_refraction(n1: Scalar, n2: Scalar, r: Scalar) -> [[Scalar; 2]; 2] {
-    [[1.0, 0.0], [(n2 - n1) / (r * n2), n1 / n2]]
+    [[1.0, 0.0], [(n1 - n2) / (r * n2), n1 / n2]]
 }
 
 /// Multiply two 2x2 ABCD matrices: result = b * a.

@@ -1,7 +1,19 @@
 //! Quantum measurement: projective, POVM, entanglement detection, state tomography.
 
-use crate::core::types::Scalar;
 use super::state::{ComplexScalar, DensityMatrix, QuantumState};
+use crate::core::types::Scalar;
+
+/// Generate a deterministic pseudo-random f64 in [0, 1) using xorshift64*.
+fn fast_rand() -> Scalar {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static STATE: AtomicU64 = AtomicU64::new(987654321);
+    let mut x = STATE.load(Ordering::Relaxed);
+    x ^= x >> 12;
+    x ^= x << 25;
+    x ^= x >> 27;
+    STATE.store(x, Ordering::Relaxed);
+    (x as f64) * (1.0 / 18446744073709551615.0_f64)
+}
 
 /// Result of a projective measurement.
 #[derive(Debug, Clone)]
@@ -15,12 +27,16 @@ pub struct MeasurementResult {
 }
 
 /// Projective measurement of a single qubit in the computational basis.
+///
+/// The outcome is sampled with probability p₀/p₁ (a true measurement, not a
+/// deterministic collapse to the most likely branch).
 pub fn projective_measurement(state: &QuantumState, qubit: usize) -> MeasurementResult {
-    let prob0 = state.measure_probability(qubit);
+    let prob0 = state.measure_probability(qubit).clamp(0.0, 1.0);
     let prob1 = 1.0 - prob0;
 
-    // Simulate outcome based on probabilities (use the higher probability)
-    let outcome = if prob0 >= prob1 { 0_usize } else { 1_usize };
+    // Sample the outcome weighted by [prob0, prob1].
+    let r = fast_rand();
+    let outcome = if r < prob0 { 0_usize } else { 1_usize };
     let probability = if outcome == 0 { prob0 } else { prob1 };
 
     // Collapse the state

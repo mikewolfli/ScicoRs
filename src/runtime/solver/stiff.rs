@@ -232,6 +232,12 @@ impl OdeSolver for BDF2 {
                 let result = be.step(f, x, t, dt)?;
                 // Store x_n as x_prev for next call
                 *self.x_prev.lock().unwrap() = Some(x_n);
+                // Merge the temporary BackwardEuler stats (function/Jacobian
+                // evaluations) so BDF2's reported statistics include the
+                // BDF1 warm-up step instead of undercounting them.
+                let be_stats = be.stats();
+                self.stats.function_evals += be_stats.function_evals;
+                self.stats.jacobian_evals += be_stats.jacobian_evals;
                 self.stats.steps_accepted += 1;
                 return Ok(result);
             }
