@@ -4,10 +4,12 @@
 //! equations F(x) = 0. Supports both analytical Jacobian and automatic
 //! finite-difference approximation.
 
+use super::linear::solve_linear_dense;
+use super::traits::{
+    JacobianFunc, NlsFunc, SolverConfig, SolverStats, SolverStepResult, finite_diff_jacobian,
+};
 use crate::core::error::SimError;
 use crate::core::types::Scalar;
-use super::linear::solve_linear_dense;
-use super::traits::{finite_diff_jacobian, JacobianFunc, NlsFunc, SolverConfig, SolverStats, SolverStepResult};
 
 /// Newton-Raphson solver for nonlinear systems F(x) = 0.
 ///
@@ -54,8 +56,8 @@ impl NewtonRaphson {
             // Evaluate F(x)
             f(x, &mut fx)?;
 
-            // Check for convergence: |F(x)| < atol
-            let norm = fx.iter().map(|v| v.abs()).fold(0.0_f64, |a, b| a.max(b));
+            // Check for convergence: max |F(x)| < atol
+            let norm = crate::core::compute::vector::vec_max_abs(&fx).unwrap_or(0.0);
             if norm < self.config.atol {
                 self.stats.steps_accepted += 1;
                 return Ok(SolverStepResult::Converged);
@@ -121,7 +123,11 @@ mod tests {
 
         let result = solver.solve(&mut f, None, &mut x).unwrap();
         assert_eq!(result, SolverStepResult::Converged);
-        assert!((x[0] - 2.0).abs() < 1e-8, "Newton did not converge to root: {}", x[0]);
+        assert!(
+            (x[0] - 2.0).abs() < 1e-8,
+            "Newton did not converge to root: {}",
+            x[0]
+        );
     }
 
     #[test]
@@ -142,8 +148,16 @@ mod tests {
         assert_eq!(result, SolverStepResult::Converged);
 
         let expected = 1.0 / (2.0_f64).sqrt();
-        assert!((x[0] - expected).abs() < 1e-6, "x error: {}", x[0] - expected);
-        assert!((x[1] - expected).abs() < 1e-6, "y error: {}", x[1] - expected);
+        assert!(
+            (x[0] - expected).abs() < 1e-6,
+            "x error: {}",
+            x[0] - expected
+        );
+        assert!(
+            (x[1] - expected).abs() < 1e-6,
+            "y error: {}",
+            x[1] - expected
+        );
     }
 
     #[test]

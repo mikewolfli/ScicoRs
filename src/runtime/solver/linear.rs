@@ -64,14 +64,16 @@ pub fn is_singular(a: &[Vec<Scalar>], tol: Scalar) -> bool {
 
 /// Compute the infinity norm of a matrix (max row sum of absolute values).
 pub fn matrix_inf_norm(a: &[Vec<Scalar>]) -> Scalar {
-    a.iter()
-        .map(|row| row.iter().map(|v| v.abs()).sum())
-        .fold(0.0_f64, |a, b| a.max(b))
+    let row_sums: Vec<Scalar> = a
+        .iter()
+        .map(|row| crate::core::compute::linalg::asum(row))
+        .collect();
+    crate::core::compute::vector::vec_max_abs(&row_sums).unwrap_or(0.0)
 }
 
 /// Compute the infinity norm of a vector.
 pub fn vector_inf_norm(v: &[Scalar]) -> Scalar {
-    v.iter().map(|x| x.abs()).fold(0.0_f64, |a, b| a.max(b))
+    crate::core::compute::vector::vec_max_abs(v).unwrap_or(0.0)
 }
 
 /// Simple sparse matrix in Compressed Sparse Row (CSR) format.

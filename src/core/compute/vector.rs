@@ -12,19 +12,7 @@ pub fn dot(a: &[Scalar], b: &[Scalar]) -> Option<Scalar> {
     if a.len() != b.len() || a.is_empty() {
         return None;
     }
-    // Route through the adaptive dispatcher for large vectors.
-    if a.len()
-        >= crate::core::compute::backend::global()
-            .config()
-            .parallel_threshold
-    {
-        return crate::core::compute::backend::global().dot(a, b).ok();
-    }
-    let mut s = 0.0;
-    for i in 0..a.len() {
-        s += a[i] * b[i];
-    }
-    Some(s)
+    crate::core::compute::backend::global().dot(a, b).ok()
 }
 
 /// Cross product of two 3D vectors.
@@ -43,11 +31,9 @@ pub fn norm(v: &[Scalar]) -> Scalar {
 
 /// Squared Euclidean norm (L2²).
 pub fn norm_squared(v: &[Scalar]) -> Scalar {
-    let mut s = 0.0;
-    for &x in v {
-        s += x * x;
-    }
-    s
+    crate::core::compute::backend::global()
+        .norm_squared(v)
+        .unwrap_or_else(|_| v.iter().map(|&x| x * x).sum())
 }
 
 /// Normalize a vector to unit length. Returns None if the vector is zero.
@@ -64,12 +50,51 @@ pub fn distance(a: &[Scalar], b: &[Scalar]) -> Option<Scalar> {
     if a.len() != b.len() {
         return None;
     }
-    let mut s = 0.0;
-    for i in 0..a.len() {
-        let d = a[i] - b[i];
-        s += d * d;
+    crate::core::compute::backend::global()
+        .vec_distance(a, b)
+        .ok()
+        .map(|s| s.sqrt())
+}
+
+/// Element-wise absolute values.
+pub fn vec_abs(a: &[Scalar]) -> Vec<Scalar> {
+    crate::core::compute::backend::global()
+        .vec_abs(a)
+        .unwrap_or_else(|_| a.iter().map(|&v| v.abs()).collect())
+}
+
+/// Arithmetic mean of a vector.
+pub fn vec_mean(a: &[Scalar]) -> Option<Scalar> {
+    if a.is_empty() {
+        return None;
     }
-    Some(s.sqrt())
+    Some(
+        crate::core::compute::backend::global()
+            .vec_mean(a)
+            .unwrap_or_else(|_| a.iter().sum::<Scalar>() / a.len() as Scalar),
+    )
+}
+
+/// Maximum absolute value of a vector.
+pub fn vec_max_abs(a: &[Scalar]) -> Option<Scalar> {
+    if a.is_empty() {
+        return None;
+    }
+    Some(
+        crate::core::compute::backend::global()
+            .vec_max_abs(a)
+            .unwrap_or_else(|_| a.iter().map(|&v| v.abs()).fold(0.0, f64::max)),
+    )
+}
+
+/// Maximum absolute difference between two vectors.
+pub fn vec_max_abs_diff(a: &[Scalar], b: &[Scalar]) -> Option<Scalar> {
+    if a.len() != b.len() {
+        return None;
+    }
+    crate::core::compute::backend::global()
+        .vec_max_abs_diff(a, b)
+        .ok()
 }
 
 /// Linear interpolation: y = y0 + (x - x0) * (y1 - y0) / (x1 - x0).
@@ -188,7 +213,7 @@ pub fn vec_add(a: &[Scalar], b: &[Scalar]) -> Option<Vec<Scalar>> {
     if a.len() != b.len() {
         return None;
     }
-    Some(a.iter().zip(b.iter()).map(|(&x, &y)| x + y).collect())
+    crate::core::compute::backend::global().vec_add(a, b).ok()
 }
 
 /// Vector subtraction: c = a - b.
@@ -196,12 +221,14 @@ pub fn vec_sub(a: &[Scalar], b: &[Scalar]) -> Option<Vec<Scalar>> {
     if a.len() != b.len() {
         return None;
     }
-    Some(a.iter().zip(b.iter()).map(|(&x, &y)| x - y).collect())
+    crate::core::compute::backend::global().vec_sub(a, b).ok()
 }
 
 /// Scalar-vector multiply.
 pub fn vec_scale(v: &[Scalar], s: Scalar) -> Vec<Scalar> {
-    v.iter().map(|&x| x * s).collect()
+    crate::core::compute::backend::global()
+        .vec_scale(v, s)
+        .unwrap_or_else(|_| v.iter().map(|&x| x * s).collect())
 }
 
 /// Element-wise product (Hadamard product).
@@ -209,7 +236,9 @@ pub fn vec_hadamard(a: &[Scalar], b: &[Scalar]) -> Option<Vec<Scalar>> {
     if a.len() != b.len() {
         return None;
     }
-    Some(a.iter().zip(b.iter()).map(|(&x, &y)| x * y).collect())
+    crate::core::compute::backend::global()
+        .vec_hadamard(a, b)
+        .ok()
 }
 
 /// Vector range: generate evenly spaced values from `start` to `end` with `n` points.
@@ -329,5 +358,12 @@ mod tests {
         let s = vec_scale(&v, 2.0);
         assert!((s[0] - 2.0).abs() < 1e-10);
         assert!((s[2] - 6.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_vec_max_abs_diff() {
+        let a = vec![1.0, -2.0, 3.0, -4.0];
+        let b = vec![1.0, 0.0, 0.0, -2.0];
+        assert!((vec_max_abs_diff(&a, &b).unwrap() - 3.0).abs() < 1e-10);
     }
 }

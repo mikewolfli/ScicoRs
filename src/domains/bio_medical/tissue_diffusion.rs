@@ -163,11 +163,13 @@ impl TissueDiffusion2D {
 
     /// Maximum concentration in the domain.
     pub fn max_concentration(&self) -> Scalar {
-        self.concentration
+        let values: Vec<Scalar> = self
+            .concentration
             .iter()
             .flat_map(|row| row.iter())
-            .cloned()
-            .fold(0.0_f64, f64::max)
+            .copied()
+            .collect();
+        crate::core::compute::vector::vec_max_abs(&values).unwrap_or(0.0)
     }
 }
 

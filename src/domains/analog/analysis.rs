@@ -175,8 +175,8 @@ pub fn run_dc_op(
         Vec::new()
     };
 
-    // Compute total power dissipation
-    let total_power = source_currents.iter().map(|i| i.abs()).sum();
+    // Compute total power dissipation using the canonical vector reduction API.
+    let total_power = crate::core::compute::linalg::asum(&source_currents);
 
     Ok(DcOpResult {
         node_voltages,
@@ -218,7 +218,7 @@ pub fn run_dc_sweep(
             Vec::new()
         };
 
-        let total_power = source_currents.iter().map(|i| i.abs()).sum();
+        let total_power = crate::core::compute::linalg::asum(&source_currents);
         Ok(DcOpResult {
             node_voltages,
             source_currents,

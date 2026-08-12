@@ -435,6 +435,114 @@ impl AdaptiveCompute {
             _ => Ok(a.iter().map(|&v| f(v)).collect()),
         }
     }
+
+    /// Element-wise vector addition `c = a + b`, routed through the adaptive
+    /// backend so the canonical CPU-parallel path is used consistently.
+    pub fn vec_add(&self, a: &[Scalar], b: &[Scalar]) -> Result<Vec<Scalar>, SimError> {
+        self.elementwise_add(a, b)
+    }
+
+    /// Element-wise vector subtraction `c = a - b`.
+    pub fn vec_sub(&self, a: &[Scalar], b: &[Scalar]) -> Result<Vec<Scalar>, SimError> {
+        if a.len() != b.len() {
+            return Err(SimError::numerical(format!(
+                "vec_sub: length mismatch {} vs {}",
+                a.len(),
+                b.len()
+            )));
+        }
+        match self.kind_for(a.len()) {
+            BackendKind::CpuParallel => {
+                use rayon::prelude::*;
+                Ok(a.par_iter().zip(b.par_iter()).map(|(x, y)| x - y).collect())
+            }
+            _ => Ok(a.iter().zip(b.iter()).map(|(x, y)| x - y).collect()),
+        }
+    }
+
+    /// Scalar-vector multiply `c = s * a`.
+    pub fn vec_scale(&self, a: &[Scalar], scale: Scalar) -> Result<Vec<Scalar>, SimError> {
+        self.map_vec(a, |v| v * scale)
+    }
+
+    /// Element-wise product `c[i] = a[i] * b[i]`.
+    pub fn vec_hadamard(&self, a: &[Scalar], b: &[Scalar]) -> Result<Vec<Scalar>, SimError> {
+        if a.len() != b.len() {
+            return Err(SimError::numerical(format!(
+                "vec_hadamard: length mismatch {} vs {}",
+                a.len(),
+                b.len()
+            )));
+        }
+        match self.kind_for(a.len()) {
+            BackendKind::CpuParallel => {
+                use rayon::prelude::*;
+                Ok(a.par_iter().zip(b.par_iter()).map(|(x, y)| x * y).collect())
+            }
+            _ => Ok(a.iter().zip(b.iter()).map(|(x, y)| x * y).collect()),
+        }
+    }
+
+    /// Squared Euclidean distance between two vectors: `||a - b||²`.
+    pub fn vec_distance(&self, a: &[Scalar], b: &[Scalar]) -> Result<Scalar, SimError> {
+        if a.len() != b.len() {
+            return Err(SimError::numerical(format!(
+                "vec_distance: length mismatch {} vs {}",
+                a.len(),
+                b.len()
+            )));
+        }
+        let diff = self.vec_sub(a, b)?;
+        self.norm_squared(&diff)
+    }
+
+    /// Element-wise absolute value `b[i] = |a[i]|`.
+    pub fn vec_abs(&self, a: &[Scalar]) -> Result<Vec<Scalar>, SimError> {
+        self.map_vec(a, |v| v.abs())
+    }
+
+    /// Mean value of a vector: `sum(a) / len(a)`.
+    pub fn vec_mean(&self, a: &[Scalar]) -> Result<Scalar, SimError> {
+        if a.is_empty() {
+            return Err(SimError::numerical("vec_mean: empty vector"));
+        }
+        Ok(self.sum(a)? / a.len() as Scalar)
+    }
+
+    /// Maximum absolute value in a vector.
+    pub fn vec_max_abs(&self, a: &[Scalar]) -> Result<Scalar, SimError> {
+        if a.is_empty() {
+            return Err(SimError::numerical("vec_max_abs: empty vector"));
+        }
+        match self.kind_for(a.len()) {
+            BackendKind::CpuParallel => {
+                use rayon::prelude::*;
+                Ok(a.par_iter().map(|v| v.abs()).reduce(|| 0.0, f64::max))
+            }
+            _ => Ok(a.iter().map(|v| v.abs()).fold(0.0, f64::max)),
+        }
+    }
+
+    /// Maximum absolute difference between two vectors: `max_i |a[i] - b[i]|`.
+    pub fn vec_max_abs_diff(&self, a: &[Scalar], b: &[Scalar]) -> Result<Scalar, SimError> {
+        if a.len() != b.len() {
+            return Err(SimError::numerical(format!(
+                "vec_max_abs_diff: length mismatch {} vs {}",
+                a.len(),
+                b.len()
+            )));
+        }
+        if a.is_empty() {
+            return Ok(0.0);
+        }
+        let diff = self.vec_sub(a, b)?;
+        self.vec_max_abs(&diff)
+    }
+
+    /// Squared Euclidean norm `||a||²`.
+    pub fn norm_squared(&self, a: &[Scalar]) -> Result<Scalar, SimError> {
+        self.dot(a, a)
+    }
 }
 
 /// A global default adaptive dispatcher, initialised once.
@@ -456,6 +564,56 @@ pub fn adaptive_mat_mul(
 /// Convenience: adaptive element-wise add via the global dispatcher.
 pub fn adaptive_add(a: &[Scalar], b: &[Scalar]) -> Result<Vec<Scalar>, SimError> {
     global().elementwise_add(a, b)
+}
+
+/// Convenience: adaptive vector subtraction via the global dispatcher.
+pub fn adaptive_vec_add(a: &[Scalar], b: &[Scalar]) -> Result<Vec<Scalar>, SimError> {
+    global().vec_add(a, b)
+}
+
+/// Convenience: adaptive vector subtraction via the global dispatcher.
+pub fn adaptive_vec_sub(a: &[Scalar], b: &[Scalar]) -> Result<Vec<Scalar>, SimError> {
+    global().vec_sub(a, b)
+}
+
+/// Convenience: adaptive scalar-vector scaling via the global dispatcher.
+pub fn adaptive_vec_scale(a: &[Scalar], scale: Scalar) -> Result<Vec<Scalar>, SimError> {
+    global().vec_scale(a, scale)
+}
+
+/// Convenience: adaptive Hadamard product via the global dispatcher.
+pub fn adaptive_vec_hadamard(a: &[Scalar], b: &[Scalar]) -> Result<Vec<Scalar>, SimError> {
+    global().vec_hadamard(a, b)
+}
+
+/// Convenience: adaptive squared distance via the global dispatcher.
+pub fn adaptive_vec_distance(a: &[Scalar], b: &[Scalar]) -> Result<Scalar, SimError> {
+    global().vec_distance(a, b)
+}
+
+/// Convenience: adaptive absolute-value vector via the global dispatcher.
+pub fn adaptive_vec_abs(a: &[Scalar]) -> Result<Vec<Scalar>, SimError> {
+    global().vec_abs(a)
+}
+
+/// Convenience: adaptive mean via the global dispatcher.
+pub fn adaptive_vec_mean(a: &[Scalar]) -> Result<Scalar, SimError> {
+    global().vec_mean(a)
+}
+
+/// Convenience: adaptive max-absolute value via the global dispatcher.
+pub fn adaptive_vec_max_abs(a: &[Scalar]) -> Result<Scalar, SimError> {
+    global().vec_max_abs(a)
+}
+
+/// Convenience: adaptive max absolute difference via the global dispatcher.
+pub fn adaptive_vec_max_abs_diff(a: &[Scalar], b: &[Scalar]) -> Result<Scalar, SimError> {
+    global().vec_max_abs_diff(a, b)
+}
+
+/// Convenience: adaptive squared norm via the global dispatcher.
+pub fn adaptive_norm_squared(a: &[Scalar]) -> Result<Scalar, SimError> {
+    global().norm_squared(a)
 }
 
 /// Convenience: adaptive AXPY via the global dispatcher.
@@ -639,6 +797,42 @@ mod tests {
         let a: Vec<Scalar> = vec![1.0, 2.0, 3.0];
         let out = comp.map_vec(&a, |v| v * v).unwrap();
         assert_eq!(out, vec![1.0, 4.0, 9.0]);
+    }
+
+    #[test]
+    fn test_unified_vector_ops_match_reference() {
+        let comp = AdaptiveCompute::new(ComputeConfig::forced(BackendKind::CpuParallel));
+        let a = vec![1.0, 2.0, 3.0, 4.0];
+        let b = vec![5.0, 6.0, 7.0, 8.0];
+
+        let c = comp.vec_add(&a, &b).unwrap();
+        let d = comp.vec_sub(&a, &b).unwrap();
+        let e = comp.vec_scale(&a, 2.5).unwrap();
+        let h = comp.vec_hadamard(&a, &b).unwrap();
+        let abs_a = comp.vec_abs(&a).unwrap();
+        let mean_a = comp.vec_mean(&a).unwrap();
+        let max_abs = comp.vec_max_abs(&a).unwrap();
+        let dist_sq = comp.vec_distance(&a, &b).unwrap();
+        let sq = comp.norm_squared(&a).unwrap();
+
+        assert_eq!(c, vec![6.0, 8.0, 10.0, 12.0]);
+        assert_eq!(d, vec![-4.0, -4.0, -4.0, -4.0]);
+        assert_eq!(e, vec![2.5, 5.0, 7.5, 10.0]);
+        assert_eq!(h, vec![5.0, 12.0, 21.0, 32.0]);
+        assert_eq!(abs_a, vec![1.0, 2.0, 3.0, 4.0]);
+        assert!((mean_a - 2.5).abs() < 1e-9);
+        assert!((max_abs - 4.0).abs() < 1e-9);
+        assert!((dist_sq - 64.0).abs() < 1e-9);
+        assert!((sq - 30.0).abs() < 1e-9);
+
+        let c_global = adaptive_vec_add(&a, &b).unwrap();
+        assert_eq!(c_global, c);
+        assert_eq!(adaptive_vec_hadamard(&a, &b).unwrap(), h);
+        assert_eq!(adaptive_vec_abs(&a).unwrap(), abs_a);
+        assert!((adaptive_vec_mean(&a).unwrap() - 2.5).abs() < 1e-9);
+        assert!((adaptive_vec_max_abs(&a).unwrap() - 4.0).abs() < 1e-9);
+        assert!((adaptive_vec_distance(&a, &b).unwrap() - 64.0).abs() < 1e-9);
+        assert!((adaptive_norm_squared(&a).unwrap() - 30.0).abs() < 1e-9);
     }
 
     #[test]

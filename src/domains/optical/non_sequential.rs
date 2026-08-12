@@ -76,7 +76,8 @@ impl NonSequentialRayTracer {
             let by = (((r.origin.y - min_y) / range_y) * bins as Scalar).floor() as usize;
             map[by.min(bins - 1)][bx.min(bins - 1)] += 1.0;
         }
-        let max = map.iter().flatten().copied().fold(0.0_f64, f64::max);
+        let max_values: Vec<Scalar> = map.iter().flatten().copied().collect();
+        let max = crate::core::compute::vector::vec_max_abs(&max_values).unwrap_or(0.0);
         if max > 0.0 {
             for row in &mut map {
                 for v in row.iter_mut() {

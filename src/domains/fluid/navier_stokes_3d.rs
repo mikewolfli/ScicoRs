@@ -550,12 +550,13 @@ mod tests {
             solver.projection_step().unwrap();
         }
         // Simulation runs without error; some velocity develops
-        let max_u = solver
+        let max_values: Vec<Scalar> = solver
             .u
             .iter()
             .flat_map(|p| p.iter().flat_map(|r| r.iter()))
-            .cloned()
-            .fold(0.0_f64, f64::max);
+            .copied()
+            .collect();
+        let max_u = crate::core::compute::vector::vec_max_abs(&max_values).unwrap_or(0.0);
         assert!(max_u >= 0.0, "velocity should be non-negative");
     }
 
@@ -568,12 +569,13 @@ mod tests {
             solver.projection_step().unwrap();
         }
         // With all walls noslip and no forcing, velocity stays (near) zero
-        let max_vel = solver
+        let max_values: Vec<Scalar> = solver
             .u
             .iter()
             .flat_map(|p| p.iter().flat_map(|r| r.iter()))
-            .cloned()
-            .fold(0.0_f64, f64::max);
+            .copied()
+            .collect();
+        let max_vel = crate::core::compute::vector::vec_max_abs(&max_values).unwrap_or(0.0);
         assert!(
             max_vel < 1e-6,
             "no-slip walls with no forcing should stay near zero"

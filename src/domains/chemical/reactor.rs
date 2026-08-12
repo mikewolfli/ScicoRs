@@ -110,8 +110,8 @@ impl Cstr {
         let heat_gen: Scalar = rates.iter().map(|r| r * (-delta_h)).sum();
 
         // Heat transfer through the jacket.
-        let heat_transfer = self.heat_transfer_coeff * self.heat_transfer_area
-            * (self.coolant_temperature - t);
+        let heat_transfer =
+            self.heat_transfer_coeff * self.heat_transfer_area * (self.coolant_temperature - t);
 
         // Inlet-outlet enthalpy convection: Q·ρ·Cp·(T_feed − T).
         let flow_enthalpy = self.flow_rate_in * self.rho_cp * (self.feed_temperature - t);
@@ -135,7 +135,9 @@ impl Cstr {
 
         for _iter in 0..20_000 {
             let mb = self.mass_balance(&conc, reaction);
-            let max_residual = mb.iter().map(|v| v.abs()).fold(0.0_f64, f64::max);
+            let max_residual =
+                crate::core::compute::vector::vec_max_abs_diff(&mb, &vec![0.0; mb.len()])
+                    .unwrap_or(0.0);
 
             // Update concentrations (mass balance relaxation).
             let dt = 0.1;
@@ -188,11 +190,7 @@ impl Pfr {
     ///
     /// Uses Euler integration along the spatial coordinate z.
     /// Returns Vec of concentration vectors at each spatial step.
-    pub fn profile(
-        &self,
-        inlet: &[Scalar],
-        reaction: &ReactionKinetics,
-    ) -> Vec<Vec<Scalar>> {
+    pub fn profile(&self, inlet: &[Scalar], reaction: &ReactionKinetics) -> Vec<Vec<Scalar>> {
         let n_steps = 100;
         let dz = self.length / n_steps as Scalar;
         // Guard against zero flow velocity (startup/degenerate input), which

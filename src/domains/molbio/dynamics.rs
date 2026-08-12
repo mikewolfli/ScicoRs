@@ -409,10 +409,8 @@ impl EnergyMinimizer {
             let forces = ff.compute_forces(coords);
 
             // Check convergence: max force component
-            let max_force = forces
-                .iter()
-                .map(|f| f.norm())
-                .fold(0.0_f64, |a, b| a.max(b));
+            let force_norms: Vec<Scalar> = forces.iter().map(|f| f.norm()).collect();
+            let max_force = crate::core::compute::vector::vec_max_abs(&force_norms).unwrap_or(0.0);
             if max_force < self.convergence {
                 return Ok(MinimizationResult {
                     final_energy: prev_energy,
@@ -480,10 +478,8 @@ impl EnergyMinimizer {
 
         for iter in 0..self.max_iter {
             // Line search along direction
-            let max_force = forces
-                .iter()
-                .map(|f| f.norm())
-                .fold(0.0_f64, |a, b| a.max(b));
+            let force_norms: Vec<Scalar> = forces.iter().map(|f| f.norm()).collect();
+            let max_force = crate::core::compute::vector::vec_max_abs(&force_norms).unwrap_or(0.0);
             if max_force < self.convergence {
                 return Ok(MinimizationResult {
                     final_energy: prev_energy,

@@ -45,7 +45,9 @@ pub mod postproc;
 pub use core::block::{Block, BlockError, SimpleBlock};
 pub use core::compute::backend::{
     AdaptiveCompute, BackendKind, ComputeConfig, GpuBackend, adaptive_add, adaptive_axpy,
-    adaptive_dot, adaptive_mat_mul, global,
+    adaptive_dot, adaptive_mat_mul, adaptive_norm_squared, adaptive_vec_abs, adaptive_vec_add,
+    adaptive_vec_distance, adaptive_vec_hadamard, adaptive_vec_max_abs, adaptive_vec_max_abs_diff,
+    adaptive_vec_mean, adaptive_vec_scale, adaptive_vec_sub, global,
 };
 pub use core::compute::linalg::{
     adaptive_asum, adaptive_cholesky, adaptive_gemv, adaptive_iamax, adaptive_lu_solve,
