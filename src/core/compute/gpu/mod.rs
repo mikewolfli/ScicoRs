@@ -28,6 +28,7 @@
 //! [`GpuBackend::supports_f64`] to avoid silently downgrading
 //! double-precision workloads.
 
+pub mod batch;
 pub mod device;
 pub mod kernels;
 pub mod pool;
@@ -40,6 +41,8 @@ use crate::core::types::Scalar;
 
 pub use device::GpuPrecision;
 pub use kernels::GpuKernels;
+
+pub use batch::{BatchEncoder, BatchOp, BatchValue};
 
 use device::GpuContext;
 use kernels::BinaryOp;
@@ -131,6 +134,23 @@ impl WgpuBackend {
         let rhs: Vec<Vec<Scalar>> = x.iter().map(|&v| vec![v]).collect();
         let prod = self.mat_mul(a, &rhs)?;
         Ok(prod.into_iter().map(|row| row[0]).collect())
+    }
+
+    /// Number of kernels this backend currently has compiled.
+    ///
+    /// Exposed for diagnostics and tests, so the compiled pipeline set is
+    /// observable rather than write-only state.
+    pub fn kernel_count(&self) -> usize {
+        self.kernels.kernel_count()
+    }
+
+    /// Start a **batched** submission sharing one command buffer and one poll.
+    ///
+    /// This is the fix for the fixed per-call round-trip: queuing N independent
+    /// operations here costs one submission instead of N. See
+    /// [`crate::core::compute::gpu::batch`] for the measured motivation.
+    pub fn batch(&self) -> crate::core::compute::gpu::batch::BatchEncoder<'_> {
+        self.kernels.batch(&self.ctx)
     }
 }
 
@@ -233,6 +253,10 @@ impl GpuBackend for WgpuBackend {
 
     fn transpose(&self, a: &[Vec<Scalar>]) -> Option<Result<Vec<Vec<Scalar>>, SimError>> {
         Some(self.dispatch_transpose(a))
+    }
+
+    fn supports_batch(&self) -> bool {
+        true
     }
 }
 

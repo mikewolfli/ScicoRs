@@ -58,6 +58,31 @@ impl Diagram {
         self.execution_order = None; // invalidate cached order
     }
 
+    /// Replace an existing block, keeping its position in the diagram.
+    ///
+    /// The replacement must carry the same id; otherwise the previous entry
+    /// would be left behind and the diagram would have a dangling block. This
+    /// is the hook used by [`crate::blocks::factory::BlockFactory::reconstruct`]
+    /// to swap placeholder blocks for real implementations.
+    pub fn replace_block(&mut self, id: &str, block: Box<dyn Block>) -> Result<(), SimError> {
+        if block.id() != id {
+            return Err(SimError::runtime(format!(
+                "replace_block: replacement id '{}' does not match target id '{}'",
+                block.id(),
+                id
+            )));
+        }
+        if !self.blocks.contains_key(id) {
+            return Err(SimError::runtime(format!(
+                "replace_block: no block with id '{}'",
+                id
+            )));
+        }
+        self.blocks.insert(id.to_string(), block);
+        self.execution_order = None; // topology may depend on the new ports
+        Ok(())
+    }
+
     /// Remove a block by ID.
     pub fn remove_block(&mut self, id: &str) -> Option<Box<dyn Block>> {
         let result = self.blocks.remove(id);
@@ -122,8 +147,7 @@ impl Diagram {
         // Collect all block IDs from the diagram.
         let all_block_ids: std::collections::HashSet<BlockId> =
             self.blocks.keys().cloned().collect();
-        let linked_set: std::collections::HashSet<BlockId> =
-            linked_order.iter().cloned().collect();
+        let linked_set: std::collections::HashSet<BlockId> = linked_order.iter().cloned().collect();
 
         // Append any isolated blocks (no links) after the linked order.
         let mut order = linked_order;

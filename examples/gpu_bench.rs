@@ -172,7 +172,54 @@ fn gpu_comparison() {
     println!("=================================================");
     println!("Interpretation: every GPU result matches the CPU reference to the");
     println!("precision of the active kernel set. On integrated GPUs (shared memory,");
-    println!("large fixed dispatch latency) the CPU SIMD path wins at these sizes;");
-    println!("ComputeConfig::discrete_gpu() lowers the GPU threshold for parts with");
-    println!("dedicated memory, where the crossover happens much earlier.");
+    println!("large fixed dispatch latency) a single GPU call loses to the CPU SIMD");
+    println!("path at these sizes; ComputeConfig::discrete_gpu() lowers the GPU");
+    println!("threshold for parts with dedicated memory.");
+
+    batched_comparison(&backend);
+}
+
+/// Measure how batching several independent kernels into one submission
+/// changes the effective per-operation cost.
+///
+/// This is the evidence behind the claim that batching fixes the fixed
+/// round-trip: the same N kernels cost one submission instead of N.
+#[cfg(feature = "gpu")]
+fn batched_comparison(backend: &scico_rs::WgpuBackend) {
+    use scico_rs::GpuBackend;
+
+    println!("=================================================");
+    println!("Batched submission (amortising the fixed round-trip):");
+    println!("  payload : 4096-element element-wise add");
+    let n = 4096;
+    let a: Vec<Scalar> = (0..n).map(|i| (i as Scalar).sin()).collect();
+    let b: Vec<Scalar> = (0..n).map(|i| (i as Scalar).cos()).collect();
+
+    for ops in [1usize, 4, 16, 64] {
+        // One-at-a-time: N separate submissions.
+        let individual = bench(8, || {
+            for _ in 0..ops {
+                let _ = backend.elementwise_add(&a, &b).unwrap();
+            }
+        });
+        // Batched: a single submission for all N kernels.
+        let batched = bench(8, || {
+            let mut batch = backend.batch();
+            for _ in 0..ops {
+                let _ = batch.push_add(&a, &b);
+            }
+            let _ = batch.run().unwrap();
+        });
+        println!(
+            "  {ops:>3} ops: individual {:>8.3} ms   batched {:>8.3} ms   {:.2}x faster   ({:.4} ms/op vs {:.4} ms/op)",
+            individual * 1e3,
+            batched * 1e3,
+            individual / batched,
+            individual * 1e3 / ops as f64,
+            batched * 1e3 / ops as f64,
+        );
+    }
+    println!("Interpretation: batching collapses N round-trips into one, which is");
+    println!("what makes the GPU worthwhile for many-small-kernel workloads even on");
+    println!("an integrated adapter.");
 }

@@ -377,6 +377,7 @@ impl SimEngine {
         crate::runtime::scheduler::signal_prop::update_inputs(
             &mut self.diagram,
             self.scheduler.signal_cache(),
+            self.context.t,
         )?;
 
         // ── Phase 4: Integrate continuous state using ODE solver ──
@@ -401,51 +402,53 @@ impl SimEngine {
                 let diagram = &mut self.diagram;
                 let cache = self.scheduler.signal_cache_mut();
 
-                let mut rhs =
-                    |x: &[f64], stage_t: f64, dx_out: &mut [f64]| -> Result<(), SimError> {
-                        // 1. Project the candidate state into the blocks so
-                        //    derivative() is evaluated at the correct state.
-                        Self::project_state(diagram, &execution_order, x)?;
+                let mut rhs = |x: &[f64],
+                               stage_t: f64,
+                               dx_out: &mut [f64]|
+                 -> Result<(), SimError> {
+                    // 1. Project the candidate state into the blocks so
+                    //    derivative() is evaluated at the correct state.
+                    Self::project_state(diagram, &execution_order, x)?;
 
-                        // 2. Advance block clocks to the stage time.
-                        for block_id in &execution_order {
-                            if let Some(block) = diagram.get_block_mut(block_id) {
-                                block.set_time(stage_t);
+                    // 2. Advance block clocks to the stage time.
+                    for block_id in &execution_order {
+                        if let Some(block) = diagram.get_block_mut(block_id) {
+                            block.set_time(stage_t);
+                        }
+                    }
+
+                    // 3. Re-evaluate outputs at the stage state/time.
+                    for block_id in &execution_order {
+                        if let Some(block) = diagram.get_block_mut(block_id) {
+                            if !block.has_output_side_effects() {
+                                block.execute_phase(ExecutionPhase::Output)?;
                             }
                         }
+                    }
 
-                        // 3. Re-evaluate outputs at the stage state/time.
-                        for block_id in &execution_order {
-                            if let Some(block) = diagram.get_block_mut(block_id) {
-                                if !block.has_output_side_effects() {
-                                    block.execute_phase(ExecutionPhase::Output)?;
-                                }
-                            }
-                        }
+                    // 4. Re-propagate the stage outputs to input ports.
+                    crate::runtime::scheduler::signal_prop::extract_outputs(diagram, cache)?;
+                    crate::runtime::scheduler::signal_prop::propagate_signals(diagram, cache)?;
+                    crate::runtime::scheduler::signal_prop::update_inputs(diagram, cache, stage_t)?;
 
-                        // 4. Re-propagate the stage outputs to input ports.
-                        crate::runtime::scheduler::signal_prop::extract_outputs(diagram, cache)?;
-                        crate::runtime::scheduler::signal_prop::propagate_signals(diagram, cache)?;
-                        crate::runtime::scheduler::signal_prop::update_inputs(diagram, cache)?;
-
-                        // 5. Collect derivatives from each continuous block.
-                        let mut offset = 0;
-                        for block_id in &execution_order {
-                            if let Some(block) = diagram.get_block(block_id) {
-                                let n_cont = block.state_declaration().continuous_count();
-                                if n_cont > 0 {
-                                    let block_dx = block.derivative()?;
-                                    for (j, &val) in block_dx.iter().enumerate() {
-                                        if offset + j < dx_out.len() {
-                                            dx_out[offset + j] = val;
-                                        }
+                    // 5. Collect derivatives from each continuous block.
+                    let mut offset = 0;
+                    for block_id in &execution_order {
+                        if let Some(block) = diagram.get_block(block_id) {
+                            let n_cont = block.state_declaration().continuous_count();
+                            if n_cont > 0 {
+                                let block_dx = block.derivative()?;
+                                for (j, &val) in block_dx.iter().enumerate() {
+                                    if offset + j < dx_out.len() {
+                                        dx_out[offset + j] = val;
                                     }
-                                    offset += n_cont;
                                 }
+                                offset += n_cont;
                             }
                         }
-                        Ok(())
-                    };
+                    }
+                    Ok(())
+                };
 
                 let state_slice = self.state.continuous.values_mut();
                 let step_result = self.solver.step(&mut rhs, state_slice, t, dt)?;

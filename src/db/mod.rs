@@ -328,11 +328,20 @@ impl LibraryDb {
         )
         .map_err(|e| DbError::SchemaError(e.to_string()))?;
 
-        // Full-text search virtual table
-        let _ = conn.execute_batch(
+        // Full-text search virtual table. A failure here must not be swallowed:
+        // `search` joins against `libraries_fts`, so a silently missing table
+        // turns every subsequent search into "no such table" at query time.
+        conn.execute_batch(
             "CREATE VIRTUAL TABLE IF NOT EXISTS libraries_fts
              USING fts5(id, name, description, tags, category);",
-        );
+        )
+        .map_err(|e| {
+            DbError::SchemaError(format!(
+                "could not create the libraries_fts full-text index (the \
+                 SQLite build must include the FTS5 module): {}",
+                e
+            ))
+        })?;
 
         Ok(())
     }
@@ -484,6 +493,24 @@ impl LibraryDb {
         let conn = self.conn.lock().unwrap();
         let category_filter = category.map(|c| c.as_str().to_string());
 
+        // An empty (or whitespace-only) query would build the FTS expression
+        // `""`, which FTS5 rejects as a syntax error (`fts5: syntax error near
+        // ""`). A partly-empty multi-word query is worse: `"copper" OR ""`
+        // silently degenerates to a no-op term. Both are avoided by building
+        // the expression from non-empty terms only, and short-circuiting when
+        // there are none.
+        let terms: Vec<&str> = query.split_whitespace().collect();
+        if terms.is_empty() {
+            return Ok(Vec::new());
+        }
+        // Strip FTS syntax characters and double any embedded quotes so a term
+        // can never terminate its own quoted phrase and alter the expression.
+        let fts_query = terms
+            .iter()
+            .map(|w| format!("\"{}\"", w.replace('"', "\"\"")))
+            .collect::<Vec<_>>()
+            .join(" OR ");
+
         // Build search query
         let sql = if category_filter.is_some() {
             "SELECT l.id, l.name, l.category, l.description, l.version, l.source
@@ -502,12 +529,6 @@ impl LibraryDb {
         let mut stmt = conn
             .prepare(sql)
             .map_err(|e| DbError::QueryError(e.to_string()))?;
-
-        let fts_query = query
-            .split_whitespace()
-            .map(|w| format!("\"{}\"", w))
-            .collect::<Vec<_>>()
-            .join(" OR ");
 
         let entries: Vec<LibraryEntry> = if let Some(ref cat) = category_filter {
             stmt.query_map(params![fts_query, cat], |row| {
@@ -1050,6 +1071,69 @@ mod tests {
             .search("copper", Some(LibraryCategory::Celestial))
             .unwrap();
         assert!(results_wrong.is_empty());
+    }
+
+    /// An empty query used to build the FTS5 expression `""`, which SQLite
+    /// rejects with `fts5: syntax error near ""` — turning a harmless empty
+    /// search into a hard `QueryError`.
+    #[test]
+    fn test_search_empty_query_returns_empty_not_error() {
+        let mgr = setup_test_db();
+        let mut e = LibraryEntry::new("material/copper", "Copper", LibraryCategory::Material);
+        e.description = "High purity copper".into();
+        mgr.save_entry(&e).unwrap();
+
+        for q in ["", "   ", "\t\n "] {
+            let results = mgr
+                .search(q, None)
+                .unwrap_or_else(|err| panic!("search({q:?}) must not error, got: {err}"));
+            assert!(results.is_empty(), "search({q:?}) must match nothing");
+        }
+    }
+
+    /// A partly-empty multi-word query used to collapse to `"copper" OR ""`,
+    /// where the empty alternative silently changed the match semantics. The
+    /// remaining real terms must still be honoured.
+    #[test]
+    fn test_search_whitespace_only_terms_are_ignored() {
+        let mgr = setup_test_db();
+        let mut e = LibraryEntry::new("material/copper", "Copper", LibraryCategory::Material);
+        e.description = "High purity copper".into();
+        mgr.save_entry(&e).unwrap();
+        let mut other = LibraryEntry::new("material/silicon", "Silicon", LibraryCategory::Material);
+        other.description = "Semiconductor silicon".into();
+        mgr.save_entry(&other).unwrap();
+
+        // Extra whitespace must not add a spurious empty alternative.
+        let results = mgr.search("  copper  ", None).unwrap();
+        assert_eq!(
+            results.len(),
+            1,
+            "only copper should match, got {:?}",
+            results.iter().map(|r| &r.id).collect::<Vec<_>>()
+        );
+        assert_eq!(results[0].id, "material/copper");
+    }
+
+    /// A query containing FTS syntax characters must be treated as literal text
+    /// rather than being able to terminate its own quoted phrase.
+    #[test]
+    fn test_search_treats_fts_syntax_as_literal() {
+        let mgr = setup_test_db();
+        let e = LibraryEntry::new("material/copper", "Copper", LibraryCategory::Material);
+        mgr.save_entry(&e).unwrap();
+
+        // A bare `"` used to produce `"""` — a malformed FTS expression.
+        let results = mgr.search("\"", None).unwrap();
+        assert!(results.is_empty(), "a lone quote must not match anything");
+
+        // Unbalanced parentheses/operators must not surface as SQL errors.
+        for q in ["copper(", "copper)", "copper AND", "copper OR", "NEAR("] {
+            assert!(
+                mgr.search(q, None).is_ok(),
+                "search({q:?}) must not raise a SQL error"
+            );
+        }
     }
 
     #[test]

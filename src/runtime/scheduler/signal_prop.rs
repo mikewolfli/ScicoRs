@@ -7,7 +7,7 @@
 use crate::core::block::BlockId;
 use crate::core::diagram::Diagram;
 use crate::core::error::SimError;
-use crate::core::types::{PortDirection, SignalValue};
+use crate::core::types::{PortDirection, Scalar, SignalValue};
 use std::collections::HashMap;
 
 /// A cache of signal values for all ports in a diagram.
@@ -63,13 +63,21 @@ impl SignalCache {
             .get(&(block_id.to_string(), port_id.to_string()))
     }
 
-    /// Advance the cache: move current values to previous.
+    /// Advance the cache: move current values to previous and clear current.
     /// Called at the end of each simulation step.
+    ///
+    /// After this call every port that existed before is present in `current`
+    /// with [`SignalValue::None`], so a port whose producer disappeared reads as
+    /// "no signal" rather than retaining a two-step-old value.
     pub fn advance(&mut self) {
         std::mem::swap(&mut self.current, &mut self.previous);
-        // Reset current to None for all ports
-        for key in self.previous.keys() {
-            self.current.entry(key.clone()).or_insert(SignalValue::None);
+        // `current` now holds the old `previous` map. It must be *reset*, not
+        // merely back-filled: `entry().or_insert()` would leave the stale
+        // values in place for every key that was already present.
+        let ports: Vec<(String, String)> = self.current.keys().cloned().collect();
+        self.current.clear();
+        for key in ports {
+            self.current.insert(key, SignalValue::None);
         }
     }
 
@@ -141,23 +149,36 @@ pub fn extract_outputs(diagram: &Diagram, cache: &mut SignalCache) -> Result<(),
 /// For each block in the diagram, iterates over its input ports and writes
 /// the corresponding cached signal value (previously propagated from source
 /// output ports via `propagate_signals()`) into the port's signal field.
+///
+/// An input port with **no** cached value is cleared instead of being left with
+/// its previous contents. Without this, disconnecting a link (or removing its
+/// producer block) would leave the stale value on the port forever, making
+/// "not connected" indistinguishable from "hold the last value".
+///
 /// Requires `&mut Diagram` because port writes mutate block state.
-pub fn update_inputs(diagram: &mut Diagram, cache: &SignalCache) -> Result<(), SimError> {
+/// `time` stamps every propagated input signal with the current simulation time
+/// so blocks that inspect `Signal::time` do not read a constant zero.
+pub fn update_inputs(
+    diagram: &mut Diagram,
+    cache: &SignalCache,
+    time: Scalar,
+) -> Result<(), SimError> {
     // Collect all block IDs first to avoid borrow conflicts
     let block_ids: Vec<String> = diagram.blocks().map(|(id, _)| id.clone()).collect();
     for id in &block_ids {
         if let Some(block) = diagram.get_block_mut(id) {
             let port_ids: Vec<String> = block.ports().inputs().map(|p| p.id.clone()).collect();
             for port_id in &port_ids {
-                if let Some(value) = cache.get(id, port_id)
-                    && !matches!(value, SignalValue::None)
-                    && let Some(port) = block.ports_mut().get_mut(port_id)
-                {
-                    port.write(crate::core::signal::Signal::new(
-                        port.signal_type,
-                        value.clone(),
-                        0.0, // time will be set by engine
-                    ));
+                let value = cache.get(id, port_id).cloned();
+                if let Some(port) = block.ports_mut().get_mut(port_id) {
+                    match value {
+                        Some(v) if !matches!(v, SignalValue::None) => {
+                            port.write(crate::core::signal::Signal::new(port.signal_type, v, time));
+                        }
+                        // No producer (or a None value): make the absence
+                        // observable instead of silently holding stale data.
+                        _ => port.clear(),
+                    }
                 }
             }
         }
@@ -224,11 +245,77 @@ mod tests {
         let mut cache = SignalCache::new();
         cache.set("B1", "out", SignalValue::Scalar(1.0));
         cache.advance();
+        // The old value must be visible as the *previous* value so edge
+        // detection can compare against it.
         assert_eq!(
             cache.get_previous("B1", "out"),
             Some(&SignalValue::Scalar(1.0))
         );
-        assert_eq!(cache.get("B1", "out"), Some(&SignalValue::None));
+        // ...and the current value must be cleared, not left stale. Absent and
+        // explicit-None must both read as "no current value".
+        assert!(
+            cache.get("B1", "out").is_none()
+                || matches!(cache.get("B1", "out"), Some(SignalValue::None)),
+            "the current value must not survive an advance, got {:?}",
+            cache.get("B1", "out")
+        );
+    }
+
+    /// Regression: `advance()` used `entry().or_insert(None)`, which left the
+    /// swapped-in stale values in place for every key already present, so a
+    /// disconnected port kept serving a two-step-old signal.
+    #[test]
+    fn test_signal_cache_advance_does_not_retain_stale_values() {
+        let mut cache = SignalCache::new();
+        cache.set("B1", "out", SignalValue::Scalar(7.0));
+        cache.advance();
+        cache.advance();
+        // Two advances later the original 7.0 must be gone from `current`
+        // entirely: it may live on in `previous`, but never as "current".
+        match cache.get("B1", "out") {
+            None | Some(SignalValue::None) => {}
+            other => panic!("stale value survived two advances: {other:?}"),
+        }
+    }
+
+    /// Regression: an input port whose producer disappeared kept its last value
+    /// forever, so "disconnected" was indistinguishable from "hold last value".
+    #[test]
+    fn test_update_inputs_clears_port_when_no_producer_exists() {
+        use crate::core::block::SimpleBlock;
+        use crate::core::types::SignalType;
+
+        let mut diagram = Diagram::new("stale");
+        let mut dst = SimpleBlock::new("Dst", "Sink");
+        dst.declare_input("in", SignalType::Continuous);
+        diagram.add_block(Box::new(dst));
+
+        let mut cache = SignalCache::from_diagram(&diagram);
+
+        // First: a real producer feeds the port.
+        cache.set("Dst", "in", SignalValue::Scalar(5.0));
+        update_inputs(&mut diagram, &cache, 1.0).unwrap();
+        let port = diagram.get_block("Dst").unwrap().ports().get("in").unwrap();
+        assert_eq!(
+            port.read().and_then(|s| s.as_scalar()),
+            Some(5.0),
+            "a present signal must be written through"
+        );
+        assert_eq!(
+            port.read().map(|s| s.time),
+            Some(1.0),
+            "the propagated signal must carry the current simulation time"
+        );
+
+        // Now the producer vanishes: the cached value is cleared.
+        cache.set("Dst", "in", SignalValue::None);
+        update_inputs(&mut diagram, &cache, 2.0).unwrap();
+        let port = diagram.get_block("Dst").unwrap().ports().get("in").unwrap();
+        assert!(
+            port.read().is_none(),
+            "a port with no producer must be cleared, not left stale; got {:?}",
+            port.read()
+        );
     }
 
     #[test]

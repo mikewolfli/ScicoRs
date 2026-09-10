@@ -150,6 +150,19 @@ impl ParameterSet {
         self.params.keys().chain(self.exprs.keys())
     }
 
+    /// Keys of concrete parameters only (excludes expression parameters).
+    ///
+    /// Use this when every key must map to a readable [`Parameter`]; `keys()`
+    /// also yields expression names, for which `get` returns `None`.
+    pub fn param_keys(&self) -> impl Iterator<Item = &String> {
+        self.params.keys()
+    }
+
+    /// Keys of expression parameters only.
+    pub fn expr_keys(&self) -> impl Iterator<Item = &String> {
+        self.exprs.keys()
+    }
+
     pub fn len(&self) -> usize {
         self.params.len() + self.exprs.len()
     }

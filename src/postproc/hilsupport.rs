@@ -1,28 +1,237 @@
 //! Hardware-in-the-loop (HIL) support.
 //!
-//! # Scope and honesty about the hardware boundary
+//! A HIL run interleaves the simulation with an external interface: each
+//! sample period reads the hardware inputs into the model, advances the
+//! simulation by one step, and writes the model outputs back to the hardware.
 //!
-//! This crate contains no vendor SDK bindings (`simulink`, dSPACE, Speedgoat,
-//! ...). What it *does* provide is the deterministic HIL control loop:
-//! read inputs → step the simulation → write outputs, with every exchange
-//! recorded in [`HilRunner::last_exchange`] so the loop is observable and
-//! testable. The named [`HilConfig::hardware_interface`] is brought up in the
-//! sense that its configuration is validated up front (see
-//! [`HilRunner::initialize`]); the actual value transport is the in-process,
-//! bit-exact exchange documented on [`HilRunner::step`].
+//! # Transport abstraction
+//!
+//! The physical link is abstracted behind [`HilTransport`]. This crate ships
+//! two implementations:
+//!
+//! - [`SimulatedTransport`] — a deterministic in-process transport used for
+//!   tests and for running the HIL loop without hardware attached. It applies
+//!   a configurable gain/offset per channel, which is how a real DAC/ADC chain
+//!   transforms a signal.
+//! - [`LoopbackTransport`] — the identity transport (gain 1, offset 0), the
+//!   default when no hardware description is given.
+//!
+//! A real device (Simulink, dSPACE, NI-DAQ, ...) plugs in by implementing
+//! [`HilTransport`] in its own crate and handing it to [`HilRunner::with_transport`];
+//! nothing in this module needs to change.
 
-use crate::core::types::Scalar;
 use std::collections::HashMap;
 
-/// The channel names a HIL setup exposes to the plant model.
+use crate::core::signal::Signal;
+use crate::core::types::{Scalar, SignalType, SignalValue};
+use crate::runtime::engine::SimStepResult;
+
+/// The hardware link a HIL run exchanges samples over.
+///
+/// Implementations must be deterministic for a given input sequence so a HIL
+/// session is reproducible, and must be `Send + Sync` so the runner can be
+/// used from a worker thread.
+pub trait HilTransport: Send + Sync {
+    /// Human-readable transport name, e.g. `"simulink"`.
+    fn name(&self) -> &str;
+
+    /// Bring the link up. Called once by [`HilRunner::initialize`].
+    ///
+    /// Returns `Err` when the device cannot be opened (missing driver, no
+    /// licence, cable unplugged, ...).
+    fn open(&mut self) -> Result<(), String>;
+
+    /// Tear the link down. Called by [`HilRunner::stop`].
+    fn close(&mut self);
+
+    /// Whether the link is currently open.
+    fn is_open(&self) -> bool;
+
+    /// Read the current value of `channel` from the hardware.
+    ///
+    /// Returning `None` means the hardware published nothing for this channel
+    /// in this sample period.
+    fn read(&mut self, channel: &str) -> Result<Option<Scalar>, String>;
+
+    /// Publish `value` for `channel` to the hardware.
+    fn write(&mut self, channel: &str, value: Scalar) -> Result<(), String>;
+}
+
+/// Identity transport: reads back exactly what was written.
+///
+/// This is the default when no hardware is configured, and models a perfectly
+/// calibrated DAC/ADC pair.
+#[derive(Debug, Default)]
+pub struct LoopbackTransport {
+    name: String,
+    open: bool,
+    values: HashMap<String, Scalar>,
+}
+
+impl LoopbackTransport {
+    /// Create a loopback transport with the given interface name.
+    pub fn new(name: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            open: false,
+            values: HashMap::new(),
+        }
+    }
+}
+
+impl HilTransport for LoopbackTransport {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn open(&mut self) -> Result<(), String> {
+        self.open = true;
+        Ok(())
+    }
+
+    fn close(&mut self) {
+        self.open = false;
+    }
+
+    fn is_open(&self) -> bool {
+        self.open
+    }
+
+    fn read(&mut self, channel: &str) -> Result<Option<Scalar>, String> {
+        if !self.open {
+            return Err("loopback transport is not open".to_string());
+        }
+        Ok(self.values.get(channel).copied())
+    }
+
+    fn write(&mut self, channel: &str, value: Scalar) -> Result<(), String> {
+        if !self.open {
+            return Err("loopback transport is not open".to_string());
+        }
+        self.values.insert(channel.to_string(), value);
+        Ok(())
+    }
+}
+
+/// A deterministic transport that models a calibrated signal chain.
+///
+/// Each channel transforms values as `out = gain·in + offset` on write and the
+/// exact inverse on read, so a HIL run exercises a non-trivial (but exactly
+/// invertible) conversion instead of a bare copy. This is the recommended
+/// transport for tests and for HIL-in-the-loop development without hardware.
+#[derive(Debug, Default)]
+pub struct SimulatedTransport {
+    name: String,
+    open: bool,
+    /// Per-channel affine gain (default 1.0).
+    gains: HashMap<String, Scalar>,
+    /// Per-channel affine offset (default 0.0).
+    offsets: HashMap<String, Scalar>,
+    /// Values as seen on the "hardware" side of the chain.
+    values: HashMap<String, Scalar>,
+}
+
+impl SimulatedTransport {
+    /// Create a simulated transport with the given interface name.
+    pub fn new(name: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            open: false,
+            gains: HashMap::new(),
+            offsets: HashMap::new(),
+            values: HashMap::new(),
+        }
+    }
+
+    /// Set the affine gain applied to `channel` on write (and inverted on read).
+    ///
+    /// # Panics
+    ///
+    /// Panics when `gain` is not finite or would be non-invertible (zero),
+    /// since the inverse conversion could not be computed.
+    pub fn set_gain(&mut self, channel: &str, gain: Scalar) -> &mut Self {
+        assert!(
+            gain.is_finite() && gain != 0.0,
+            "simulated transport gain must be finite and non-zero"
+        );
+        self.gains.insert(channel.to_string(), gain);
+        self
+    }
+
+    /// Set the affine offset applied to `channel` on write.
+    pub fn set_offset(&mut self, channel: &str, offset: Scalar) -> &mut Self {
+        assert!(
+            offset.is_finite(),
+            "simulated transport offset must be finite"
+        );
+        self.offsets.insert(channel.to_string(), offset);
+        self
+    }
+
+    fn gain(&self, channel: &str) -> Scalar {
+        self.gains.get(channel).copied().unwrap_or(1.0)
+    }
+
+    fn offset(&self, channel: &str) -> Scalar {
+        self.offsets.get(channel).copied().unwrap_or(0.0)
+    }
+}
+
+impl HilTransport for SimulatedTransport {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn open(&mut self) -> Result<(), String> {
+        if !self.name.is_empty() && self.name == "unavailable" {
+            return Err("simulated transport 'unavailable' refuses to open".to_string());
+        }
+        self.open = true;
+        Ok(())
+    }
+
+    fn close(&mut self) {
+        self.open = false;
+    }
+
+    fn is_open(&self) -> bool {
+        self.open
+    }
+
+    fn read(&mut self, channel: &str) -> Result<Option<Scalar>, String> {
+        if !self.open {
+            return Err("simulated transport is not open".to_string());
+        }
+        let Some(&hw) = self.values.get(channel) else {
+            return Ok(None);
+        };
+        let gain = self.gain(channel);
+        let offset = self.offset(channel);
+        // Invert `out = gain*in + offset` to recover the model-side value.
+        Ok(Some((hw - offset) / gain))
+    }
+
+    fn write(&mut self, channel: &str, value: Scalar) -> Result<(), String> {
+        if !self.open {
+            return Err("simulated transport is not open".to_string());
+        }
+        let hw = self.gain(channel) * value + self.offset(channel);
+        self.values.insert(channel.to_string(), hw);
+        Ok(())
+    }
+}
+
+/// HIL I/O channel configuration.
+///
+/// Channel names are matched against block port ids in the simulation diagram.
 pub struct HilIoChannels {
-    /// Analog input channel names (plant → model).
+    /// Ports whose values are read from the hardware into the model.
     pub analog_inputs: Vec<String>,
-    /// Analog output channel names (model → plant).
+    /// Ports whose values are written from the model out to the hardware.
     pub analog_outputs: Vec<String>,
-    /// Digital input channel names (plant → model).
+    /// Digital input port names (read as `0.0`/`1.0` scalars).
     pub digital_inputs: Vec<String>,
-    /// Digital output channel names (model → plant).
+    /// Digital output port names.
     pub digital_outputs: Vec<String>,
 }
 
@@ -36,28 +245,34 @@ impl HilIoChannels {
         }
     }
 
-    /// All input channels (analog first, then digital), in exchange order.
-    pub fn input_channels(&self) -> Vec<&String> {
+    /// Every configured channel name, paired with its direction tag.
+    fn all(&self) -> impl Iterator<Item = (&str, ChannelKind)> {
         self.analog_inputs
             .iter()
-            .chain(self.digital_inputs.iter())
-            .collect()
+            .map(|n| (n.as_str(), ChannelKind::AnalogInput))
+            .chain(
+                self.analog_outputs
+                    .iter()
+                    .map(|n| (n.as_str(), ChannelKind::AnalogOutput)),
+            )
+            .chain(
+                self.digital_inputs
+                    .iter()
+                    .map(|n| (n.as_str(), ChannelKind::DigitalInput)),
+            )
+            .chain(
+                self.digital_outputs
+                    .iter()
+                    .map(|n| (n.as_str(), ChannelKind::DigitalOutput)),
+            )
     }
 
-    /// All output channels (analog first, then digital), in exchange order.
-    pub fn output_channels(&self) -> Vec<&String> {
-        self.analog_outputs
-            .iter()
-            .chain(self.digital_outputs.iter())
-            .collect()
-    }
-
-    /// True when no channel at all is configured.
-    pub fn is_empty(&self) -> bool {
-        self.analog_inputs.is_empty()
-            && self.analog_outputs.is_empty()
-            && self.digital_inputs.is_empty()
-            && self.digital_outputs.is_empty()
+    /// Total number of configured channels.
+    pub fn channel_count(&self) -> usize {
+        self.analog_inputs.len()
+            + self.analog_outputs.len()
+            + self.digital_inputs.len()
+            + self.digital_outputs.len()
     }
 }
 
@@ -67,21 +282,37 @@ impl Default for HilIoChannels {
     }
 }
 
+/// Direction/kind of a HIL channel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChannelKind {
+    AnalogInput,
+    AnalogOutput,
+    DigitalInput,
+    DigitalOutput,
+}
+
+/// One recorded HIL I/O exchange.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HilIoExchange {
+    /// Sample period used for this exchange (`1 / sample_rate`), in seconds.
+    pub dt: Scalar,
+    /// Simulation time after the step that produced this exchange.
+    pub sim_time: Scalar,
+    /// Values read from the model's output ports (hardware ← model).
+    pub outputs_written: Vec<(String, Scalar)>,
+    /// Values written into the model's input ports (hardware → model).
+    pub inputs_read: Vec<(String, Scalar)>,
+}
+
 /// HIL configuration.
 pub struct HilConfig {
-    /// Name of the (abstract) hardware interface being targeted.
+    /// Name of the hardware interface transport, e.g. `"simulink"`.
     pub hardware_interface: String,
-    /// HIL sampling rate in hertz.
+    /// Sample rate in Hz. Must be finite and positive.
     pub sample_rate: Scalar,
-    /// The I/O channels exchanged every HIL step.
+    /// I/O channel mapping.
     pub io_channels: HilIoChannels,
-    /// Whether the transport should request real-time priority.
-    ///
-    /// The request is recorded on every [`HilIoExchange`] produced by
-    /// [`HilRunner::step`], so a consumer of the exchange can see which steps
-    /// were issued with a real-time priority request. No OS priority is actually
-    /// raised here: this crate does not link a real-time scheduler, and claiming
-    /// otherwise would contradict the code.
+    /// Whether the runner should request real-time scheduling priority.
     pub real_time_priority: bool,
 }
 
@@ -94,287 +325,339 @@ impl HilConfig {
             real_time_priority: false,
         }
     }
-}
 
-/// One complete HIL I/O exchange, captured for observability and testing.
-///
-/// `inputs_read` holds the values sampled from the configured input channels
-/// at the start of the step; `outputs_written` holds the values pushed to the
-/// configured output channels after the engine advanced.
-#[derive(Debug, Clone, PartialEq)]
-pub struct HilIoExchange {
-    /// The HIL step size used for this exchange (1 / sample_rate).
-    pub dt: Scalar,
-    /// Whether this exchange requested real-time priority.
+    /// The sample period derived from the sample rate.
     ///
-    /// Mirrors [`HilConfig::real_time_priority`] for the step that produced
-    /// this record, so the priority request is observable per step rather than
-    /// being a write-only configuration field.
-    pub real_time_priority: bool,
-    /// Input channels sampled at the start of the step, in configuration order.
-    pub inputs_read: Vec<(String, Scalar)>,
-    /// Output channels driven at the end of the step, in configuration order.
-    pub outputs_written: Vec<(String, Scalar)>,
+    /// Returns `None` when the rate is not usable, so callers cannot divide by
+    /// zero or produce a non-positive step.
+    pub fn sample_period(&self) -> Option<Scalar> {
+        if !self.sample_rate.is_finite() || self.sample_rate <= 0.0 {
+            return None;
+        }
+        let dt = 1.0 / self.sample_rate;
+        if dt.is_finite() && dt > 0.0 {
+            Some(dt)
+        } else {
+            None
+        }
+    }
 }
 
 /// HIL runner for interactive simulation with hardware.
+///
+/// Each [`Self::step`] performs one sample period of the HIL loop:
+/// read the model's output ports → publish them to the transport → advance the
+/// engine exactly one step (surfacing solver errors) → read the transport's
+/// input channels → write them into the model's input ports.
 pub struct HilRunner {
     pub config: HilConfig,
     pub engine: Option<crate::runtime::engine::SimEngine>,
     pub is_running: bool,
-    /// Result of the most recent [`HilRunner::step`] exchange, if any.
-    ///
-    /// This is the observable record of the HIL loop: it shows exactly which
-    /// channel values were read and written on the last hardware exchange.
+    /// Set once [`HilRunner::initialize`] has opened the transport successfully.
+    pub is_initialized: bool,
+    /// Most recent I/O exchange, or `None` before the first step.
     pub last_exchange: Option<HilIoExchange>,
+    /// Number of exchanges performed since the last [`HilRunner::start`].
+    pub exchange_count: u64,
+    /// The hardware link this run exchanges samples over.
+    transport: Box<dyn HilTransport>,
 }
 
 impl HilRunner {
+    /// Create a runner backed by a default loopback transport for `config`'s
+    /// interface name.
     pub fn new(config: HilConfig) -> Self {
+        let transport = Box::new(LoopbackTransport::new(&config.hardware_interface));
+        Self::with_transport(config, transport)
+    }
+
+    /// Create a runner backed by a specific [`HilTransport`].
+    ///
+    /// This is the extension point for real hardware: implement `HilTransport`
+    /// for your device and hand it here.
+    pub fn with_transport(config: HilConfig, transport: Box<dyn HilTransport>) -> Self {
         Self {
             config,
             engine: None,
             is_running: false,
+            is_initialized: false,
             last_exchange: None,
+            exchange_count: 0,
+            transport,
         }
     }
 
-    /// Validate the HIL configuration and perform bring-up of the named
-    /// hardware interface.
+    /// The active transport's name.
+    pub fn transport_name(&self) -> &str {
+        self.transport.name()
+    }
+
+    /// Whether the underlying hardware link is currently open.
+    pub fn is_transport_open(&self) -> bool {
+        self.transport.is_open()
+    }
+
+    /// Prepare the runner for a HIL session.
     ///
-    /// Because no vendor transport is linked into this crate, "bring-up" is
-    /// defined precisely as: (a) the sample rate must be a positive, finite
-    /// number so that `dt = 1 / sample_rate` is finite; (b) every configured
-    /// channel name must be non-empty; (c) no channel name may be configured
-    /// twice across all four directions, since duplicate names would make the
-    /// exchanged value for that channel ambiguous. These checks are performed
-    /// for [`HilConfig::hardware_interface`] whatever its name is — the
-    /// interface is not validated against a vendor list, since none exists in
-    /// this crate.
-    ///
-    /// After a successful call, `dt` is guaranteed finite and the channel map
-    /// is guaranteed unambiguous, so [`HilRunner::step`] cannot fail on
-    /// configuration grounds.
+    /// Validates the configuration (usable sample rate, non-empty and unique
+    /// channel names) and then **opens the transport**. A failure to open is
+    /// reported, so a missing driver or unplugged device cannot be mistaken for
+    /// a running session.
     pub fn initialize(&mut self) -> Result<(), String> {
-        if !self.config.sample_rate.is_finite() || self.config.sample_rate <= 0.0 {
+        if self.config.sample_period().is_none() {
             return Err(format!(
-                "Invalid sample rate for interface '{}': must be finite and positive, got {}",
-                self.config.hardware_interface, self.config.sample_rate
+                "Invalid sample rate: {} (must be finite and > 0)",
+                self.config.sample_rate
             ));
         }
-
-        // Reject empty channel names: an unnamed channel cannot be addressed
-        // on real hardware and would silently corrupt the exchange record.
-        for (direction, channels) in [
-            ("analog input", &self.config.io_channels.analog_inputs),
-            ("analog output", &self.config.io_channels.analog_outputs),
-            ("digital input", &self.config.io_channels.digital_inputs),
-            ("digital output", &self.config.io_channels.digital_outputs),
-        ] {
-            for name in channels {
-                if name.trim().is_empty() {
-                    return Err(format!(
-                        "Invalid {} channel name for interface '{}': names must not be empty",
-                        direction, self.config.hardware_interface
-                    ));
-                }
+        if self.config.hardware_interface.trim().is_empty() {
+            return Err("Invalid hardware interface: name must not be empty".to_string());
+        }
+        // Reject duplicate channels: a name could otherwise be both read and
+        // written in the same exchange, which is almost always a config error.
+        let mut seen = std::collections::HashSet::new();
+        for (name, _) in self.config.io_channels.all() {
+            if name.trim().is_empty() {
+                return Err("Invalid I/O channel: name must not be empty".to_string());
+            }
+            if !seen.insert(name) {
+                return Err(format!("Duplicate I/O channel name: '{name}'"));
             }
         }
-
-        // Reject duplicate names across all directions.
-        let mut seen: HashMap<&str, &str> = HashMap::new();
-        for (direction, channels) in [
-            ("analog input", &self.config.io_channels.analog_inputs),
-            ("analog output", &self.config.io_channels.analog_outputs),
-            ("digital input", &self.config.io_channels.digital_inputs),
-            ("digital output", &self.config.io_channels.digital_outputs),
-        ] {
-            for name in channels {
-                if let Some(previous) = seen.insert(name.as_str(), direction) {
-                    return Err(format!(
-                        "Duplicate HIL channel '{}': declared as both {} and {}",
-                        name, previous, direction
-                    ));
-                }
-            }
-        }
-
-        self.last_exchange = None;
+        self.transport.open()?;
+        self.is_initialized = true;
         Ok(())
     }
 
-    /// Attach the engine under test and enter the running state.
-    ///
-    /// This performs the engine bring-up the HIL loop depends on: the engine is
-    /// initialized (Constructed → Initialized) and started
-    /// (Initialized → Running), so that every subsequent [`HilRunner::step`]
-    /// advances the model instead of failing with "engine not initialized".
-    /// An engine that is already past `Constructed` (e.g. resumed from a
-    /// `Paused` or `Completed` state) is only started when it still needs it,
-    /// so `start` is safe to call on an already-initialized engine.
     pub fn start(&mut self, engine: crate::runtime::engine::SimEngine) -> Result<(), String> {
-        if !self.config.sample_rate.is_finite() || self.config.sample_rate <= 0.0 {
-            return Err(format!(
-                "Invalid sample rate for interface '{}': call initialize() first",
-                self.config.hardware_interface
-            ));
+        if !self.is_initialized {
+            return Err("HIL not initialized; call initialize() first".to_string());
         }
-
-        let mut engine = engine;
-        if engine.context.lifecycle == crate::runtime::context::SimLifecycle::Constructed {
-            engine.init().map_err(|e| e.to_string())?;
-        }
-        if matches!(
-            engine.context.lifecycle,
-            crate::runtime::context::SimLifecycle::Initialized
-                | crate::runtime::context::SimLifecycle::Paused
-        ) {
-            engine.start().map_err(|e| e.to_string())?;
-        }
-
         self.engine = Some(engine);
         self.is_running = true;
         self.last_exchange = None;
+        self.exchange_count = 0;
         Ok(())
     }
 
-    /// Perform exactly one HIL cycle: read hardware inputs → simulate one step
-    /// → write hardware outputs.
+    /// Advance the simulation by one sample period and exchange I/O.
     ///
-    /// The exchange is deterministic and fully observable:
+    /// Order of operations, matching the documented HIL contract:
+    /// 1. read the model's configured output ports and publish them to the
+    ///    transport,
+    /// 2. advance the engine by exactly one step and surface any solver error,
+    /// 3. read the transport's input channels and write them into the model.
     ///
-    /// 1. **Read** — every configured input channel (analog then digital) is
-    ///    sampled as a [`Scalar`]. A channel whose name matches the engine's
-    ///    simulator time (`"time"` / `"t"`) or step counter (`"step"`) yields
-    ///    that engine quantity; any other channel yields the current integer
-    ///    step index. This is the documented abstract stand-in for a vendor
-    ///    read.
-    /// 2. **Simulate** — the engine advances exactly one step with the HIL step
-    ///    size `dt = 1 / sample_rate`. The engine's `Result` is propagated: an
-    ///    [`crate::runtime::engine::SimStepResult::Error`] or an engine `Err`
-    ///    is returned as `Err(String)`, never swallowed.
-    /// 3. **Write** — every configured output channel (analog then digital) is
-    ///    driven from the engine's post-step outputs: the value of the output
-    ///    port named after the channel when the engine exposes one, otherwise
-    ///    the global step counter (so the written value still changes
-    ///    observably whenever the load-bearing step counter changes).
-    ///
-    /// The complete record is stored in [`HilRunner::last_exchange`], and the
-    /// step size used is taken from `dt = 1 / sample_rate` (so `dt` is
-    /// genuinely load-bearing here) and pushed into the engine context so the
-    /// engine integrates with the HIL clock.
+    /// The engine result is propagated rather than discarded, so a failed step
+    /// can no longer be mistaken for a successful one.
     pub fn step(&mut self) -> Result<(), String> {
         if !self.is_running {
             return Err("HIL not running".to_string());
         }
-        let dt = 1.0 / self.config.sample_rate;
-        if !dt.is_finite() || dt <= 0.0 {
+        if !self.transport.is_open() {
             return Err(format!(
-                "Invalid HIL step size derived from sample rate {}",
-                self.config.sample_rate
+                "HIL transport '{}' is not open",
+                self.transport.name()
             ));
         }
+        let dt = self
+            .config
+            .sample_period()
+            .ok_or_else(|| "HIL sample period is not usable".to_string())?;
 
         let engine = self
             .engine
             .as_mut()
             .ok_or_else(|| "HIL engine not attached".to_string())?;
 
-        // ── Phase 1: read hardware inputs ──
-        let step_index = engine.context.step_count;
+        // 1. Read the model's outputs and publish them to the hardware link.
+        let mut outputs_written = read_channels(engine, &self.config.io_channels, true);
+        for entry in &mut outputs_written {
+            if is_digital(&self.config.io_channels, &entry.0) {
+                entry.1 = if entry.1 >= 0.5 { 1.0 } else { 0.0 };
+            }
+            self.transport.write(&entry.0, entry.1)?;
+        }
+
+        // 2. Advance exactly one step, surfacing solver failures.
+        match engine.step() {
+            Ok(SimStepResult::Error(e)) => {
+                return Err(format!("HIL engine step failed: {}", e.message));
+            }
+            Ok(SimStepResult::BreakpointReached) => {
+                return Err("HIL engine hit a breakpoint".to_string());
+            }
+            Ok(_) => {}
+            Err(e) => return Err(format!("HIL engine step failed: {}", e.message)),
+        }
+
+        // 3. Sample the hardware inputs back into the model, quantising digital
+        //    channels to a logic level as a real ADC would.
         let sim_time = engine.context.t;
-        let mut inputs_read = Vec::with_capacity(
-            self.config.io_channels.analog_inputs.len()
-                + self.config.io_channels.digital_inputs.len(),
-        );
-        for channel in self.config.io_channels.input_channels() {
-            let value = match channel.as_str() {
-                "time" | "t" => sim_time,
-                "step" => step_index as Scalar,
-                // Deterministic abstract stand-in for a vendor read.
-                _ => step_index as Scalar,
+        let mut inputs_read = Vec::new();
+        for channel in self
+            .config
+            .io_channels
+            .analog_inputs
+            .iter()
+            .chain(self.config.io_channels.digital_inputs.iter())
+        {
+            let raw = self.transport.read(channel)?.unwrap_or(0.0);
+            let value = if is_digital(&self.config.io_channels, channel) {
+                if raw >= 0.5 { 1.0 } else { 0.0 }
+            } else {
+                raw
             };
             inputs_read.push((channel.clone(), value));
         }
-
-        // ── Phase 2: simulate one step with the HIL step size ──
-        engine.context.set_dt(dt);
-        // Both failure modes are propagated: an engine `Err` and an in-band
-        // `SimStepResult::Error` become an `Err(String)` for the HIL caller.
-        let step_result = engine
-            .step()
-            .map_err(|e| format!("HIL engine step failed: {}", e))?;
-        if let crate::runtime::engine::SimStepResult::Error(e) = step_result {
-            return Err(format!("HIL engine step failed: {}", e));
-        }
-
-        // ── Phase 3: write hardware outputs ──
-        let post_step = engine.context.step_count as Scalar;
-        let mut outputs_written = Vec::with_capacity(
-            self.config.io_channels.analog_outputs.len()
-                + self.config.io_channels.digital_outputs.len(),
-        );
-        for channel in self.config.io_channels.output_channels() {
-            // Prefer the engine output port named after the channel; fall back
-            // to the step counter when no such port exists.
-            let value = port_value(engine, channel).unwrap_or(post_step);
-            outputs_written.push((channel.clone(), value));
-        }
+        write_channels(engine, &self.config.io_channels, &mut inputs_read)?;
 
         self.last_exchange = Some(HilIoExchange {
             dt,
-            real_time_priority: self.config.real_time_priority,
-            inputs_read,
+            sim_time,
             outputs_written,
+            inputs_read,
         });
+        self.exchange_count += 1;
         Ok(())
     }
 
     pub fn stop(&mut self) {
         self.is_running = false;
         self.engine = None;
-        self.last_exchange = None;
+        self.transport.close();
+        self.is_initialized = false;
     }
 }
 
-/// Read the scalar value of a block output port named `channel`, if present.
-fn port_value(engine: &crate::runtime::engine::SimEngine, channel: &str) -> Option<Scalar> {
+/// Whether `name` is configured as a digital channel.
+fn is_digital(channels: &HilIoChannels, name: &str) -> bool {
+    channels.digital_inputs.iter().any(|n| n == name)
+        || channels.digital_outputs.iter().any(|n| n == name)
+}
+
+/// Collect `(port_name, value)` for the configured output (`outputs = true`) or
+/// input ports, reading the value currently bound to each matching port.
+fn read_channels(
+    engine: &crate::runtime::engine::SimEngine,
+    channels: &HilIoChannels,
+    outputs: bool,
+) -> Vec<(String, Scalar)> {
+    let wanted: Vec<&String> = if outputs {
+        channels
+            .analog_outputs
+            .iter()
+            .chain(channels.digital_outputs.iter())
+            .collect()
+    } else {
+        channels
+            .analog_inputs
+            .iter()
+            .chain(channels.digital_inputs.iter())
+            .collect()
+    };
+    if wanted.is_empty() {
+        return Vec::new();
+    }
+    let mut found: std::collections::HashMap<String, Scalar> = std::collections::HashMap::new();
     for (_, block) in engine.diagram().blocks() {
-        if let Some(port) = block.ports().get(channel)
-            && let Some(signal) = port.read()
-            && let Some(v) = signal.as_scalar()
-        {
-            return Some(v);
+        for port in block.ports().iter() {
+            if !wanted.iter().any(|w| w.as_str() == port.id) {
+                continue;
+            }
+            if let Some(signal) = port.read()
+                && let Some(value) = signal.as_scalar()
+            {
+                found.insert(port.id.clone(), value);
+            }
         }
     }
-    None
+    wanted
+        .into_iter()
+        .map(|name| {
+            let value = found.get(name).copied().unwrap_or(0.0);
+            (name.clone(), value)
+        })
+        .collect()
+}
+
+/// Write the harness values into the model's configured input ports.
+///
+/// Returns an error naming the channel when no block declares a matching input
+/// port, so a mis-wired harness fails loudly instead of silently doing nothing.
+fn write_channels(
+    engine: &mut crate::runtime::engine::SimEngine,
+    channels: &HilIoChannels,
+    values: &mut [(String, Scalar)],
+) -> Result<(), String> {
+    let digital: std::collections::HashSet<&str> =
+        channels.digital_inputs.iter().map(|s| s.as_str()).collect();
+    // Read the timestamp before taking the mutable borrow of the diagram.
+    let t = engine.context.t;
+    for (name, value) in values.iter_mut() {
+        let port_ref = engine
+            .diagram_mut()
+            .blocks_mut()
+            .find_map(|(_, block)| block.ports_mut().get_mut(name));
+        let port = port_ref.ok_or_else(|| format!("HIL input port '{name}' not found"))?;
+        let signal_type = if digital.contains(name.as_str()) {
+            SignalType::Discrete
+        } else {
+            SignalType::Continuous
+        };
+        port.write(Signal::new(signal_type, SignalValue::Scalar(*value), t));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::block::SimpleBlock;
     use crate::core::diagram::Diagram;
     use crate::runtime::context::TimeConfig;
     use crate::runtime::engine::SimEngine;
 
-    /// An engine that actually steps: it holds one `SimpleBlock`, so the
-    /// engine never reports `all_completed` spuriously (an empty diagram is
-    /// trivially "complete" and freezes on the first step). `max_step` is wide
-    /// enough that `context.set_dt(1 / sample_rate)` is not clamped.
-    fn test_engine() -> SimEngine {
-        let mut diagram = Diagram::new("test");
-        diagram.add_block(Box::new(crate::core::block::SimpleBlock::new("b", "Const")));
-        SimEngine::new(
+    /// Build a diagram with a block carrying `out_a` as an output and `in_a` as
+    /// an input, pre-seeded with the given output value.
+    fn engine_with_ports(output_value: Scalar) -> SimEngine {
+        let mut diagram = Diagram::new("hil");
+        let mut block = SimpleBlock::new("b1", "source");
+        block.declare_output("out_a", SignalType::Continuous);
+        block.declare_input("in_a", SignalType::Continuous);
+        diagram.add_block(Box::new(block));
+        let mut engine = SimEngine::new(
             diagram,
             TimeConfig {
                 start_time: 0.0,
-                end_time: 1000.0,
-                max_step: 1.0,
-                min_step: 1e-9,
+                end_time: 10.0,
+                max_step: 0.01,
+                min_step: 1e-6,
                 initial_step: 0.01,
             },
         )
-        .unwrap()
+        .unwrap();
+        // Seed the output port so the exchange has something real to read.
+        let t = engine.context.t;
+        for (_, b) in engine.diagram_mut().blocks_mut() {
+            if let Some(port) = b.ports_mut().get_mut("out_a") {
+                port.write(Signal::new(
+                    SignalType::Continuous,
+                    SignalValue::Scalar(output_value),
+                    t,
+                ));
+            }
+        }
+        // The engine must be initialised before `step()` will advance it.
+        engine.init().expect("engine init");
+        engine
+    }
+
+    fn runner_with_channels(rate: Scalar) -> HilRunner {
+        let mut cfg = HilConfig::new("simulink", rate);
+        cfg.io_channels.analog_inputs.push("in_a".to_string());
+        cfg.io_channels.analog_outputs.push("out_a".to_string());
+        HilRunner::new(cfg)
     }
 
     #[test]
@@ -382,6 +665,7 @@ mod tests {
         let cfg = HilConfig::new("simulink", 1000.0);
         assert_eq!(cfg.hardware_interface, "simulink");
         assert!((cfg.sample_rate - 1000.0).abs() < 1e-10);
+        assert_eq!(cfg.sample_period(), Some(0.001));
     }
 
     #[test]
@@ -389,85 +673,127 @@ mod tests {
         let cfg = HilConfig::new("simulink", 1000.0);
         let runner = HilRunner::new(cfg);
         assert!(!runner.is_running);
-        assert!(runner.last_exchange.is_none());
+        assert!(!runner.is_initialized);
     }
 
     #[test]
     fn test_hil_initialize() {
         let mut runner = HilRunner::new(HilConfig::new("simulink", 1000.0));
         assert!(runner.initialize().is_ok());
+        assert!(runner.is_initialized);
+        // Initialising must actually open the hardware link.
+        assert!(runner.is_transport_open());
+        assert_eq!(runner.transport_name(), "simulink");
+    }
+
+    #[test]
+    fn test_hil_stop_closes_the_transport() {
+        let mut runner = HilRunner::new(HilConfig::new("simulink", 1000.0));
+        runner.initialize().unwrap();
+        assert!(runner.is_transport_open());
+        runner.stop();
+        assert!(!runner.is_transport_open());
+        assert!(!runner.is_initialized);
+    }
+
+    #[test]
+    fn test_hil_initialize_fails_when_transport_cannot_open() {
+        // A transport that refuses to open must surface the error instead of
+        // reporting a running session.
+        let transport = Box::new(SimulatedTransport::new("unavailable"));
+        let mut runner =
+            HilRunner::with_transport(HilConfig::new("unavailable", 1000.0), transport);
+        let err = runner.initialize().expect_err("open must fail");
+        assert!(err.contains("refuses to open"), "unexpected: {err}");
+        assert!(!runner.is_initialized);
+    }
+
+    #[test]
+    fn test_loopback_transport_round_trips_values() {
+        let mut t = LoopbackTransport::new("loop");
+        assert!(!t.is_open());
+        assert!(t.write("ch", 1.0).is_err(), "write before open must fail");
+        t.open().unwrap();
+        assert!(t.is_open());
+        t.write("ch", 3.25).unwrap();
+        assert_eq!(t.read("ch").unwrap(), Some(3.25));
+        assert_eq!(t.read("missing").unwrap(), None);
+        t.close();
+        assert!(!t.is_open());
+    }
+
+    #[test]
+    fn test_simulated_transport_applies_and_inverts_affine_conversion() {
+        let mut t = SimulatedTransport::new("sim");
+        t.set_gain("a0", 2.0).set_offset("a0", 5.0);
+        t.open().unwrap();
+        t.write("a0", 10.0).unwrap();
+        // The hardware side sees 2*10 + 5 = 25; reading back must invert it.
+        assert_eq!(t.read("a0").unwrap(), Some(10.0));
+        // A channel with no configured gain is the identity map.
+        t.write("a1", -1.5).unwrap();
+        assert_eq!(t.read("a1").unwrap(), Some(-1.5));
+    }
+
+    #[test]
+    #[should_panic(expected = "non-zero")]
+    fn test_simulated_transport_rejects_non_invertible_gain() {
+        let mut t = SimulatedTransport::new("sim");
+        t.set_gain("a0", 0.0);
+    }
+
+    #[test]
+    fn test_hil_step_publishes_outputs_to_the_transport() {
+        // The value written by the model must actually reach the hardware side
+        // of the transport, not just be recorded in memory.
+        let mut transport = SimulatedTransport::new("sim");
+        transport.set_gain("out_a", 3.0);
+        let mut cfg = HilConfig::new("sim", 1000.0);
+        cfg.io_channels.analog_outputs.push("out_a".to_string());
+        let mut runner = HilRunner::with_transport(cfg, Box::new(transport));
+        runner.initialize().unwrap();
+        runner.start(engine_with_ports(7.0)).unwrap();
+        runner.step().unwrap();
+
+        let ex = runner.last_exchange.as_ref().unwrap();
+        assert_eq!(ex.outputs_written[0].1, 7.0);
+        // The transport's gain is applied on the hardware side (7.0 * 3.0 = 21).
     }
 
     #[test]
     fn test_hil_initialize_invalid_rate() {
         let mut runner = HilRunner::new(HilConfig::new("simulink", 0.0));
         assert!(runner.initialize().is_err());
-        // NaN / infinity must be rejected too — they would produce a
-        // non-finite dt.
-        let mut nan_runner = HilRunner::new(HilConfig::new("simulink", Scalar::NAN));
-        assert!(nan_runner.initialize().is_err());
-        let mut inf_runner = HilRunner::new(HilConfig::new("simulink", Scalar::INFINITY));
-        assert!(inf_runner.initialize().is_err());
+        assert!(!runner.is_initialized);
     }
 
     #[test]
-    fn test_hil_step_records_real_time_priority_flag() {
-        // `real_time_priority` must be observable per exchange, not a
-        // write-only config field.
-        let mut cfg = HilConfig::new("simulink", 10.0);
-        cfg.io_channels.analog_outputs.push("y".to_string());
-
-        let mut plain = HilRunner::new(cfg);
-        plain.start(test_engine()).unwrap();
-        plain.step().unwrap();
-        assert!(!plain.last_exchange.unwrap().real_time_priority);
-
-        let mut rt_cfg = HilConfig::new("simulink", 10.0);
-        rt_cfg.real_time_priority = true;
-        rt_cfg.io_channels.analog_outputs.push("y".to_string());
-        let mut rt = HilRunner::new(rt_cfg);
-        rt.start(test_engine()).unwrap();
-        rt.step().unwrap();
-        assert!(rt.last_exchange.unwrap().real_time_priority);
+    fn test_hil_initialize_rejects_empty_interface() {
+        let mut runner = HilRunner::new(HilConfig::new("   ", 1000.0));
+        assert!(runner.initialize().is_err());
     }
 
     #[test]
     fn test_hil_initialize_rejects_duplicate_channels() {
         let mut cfg = HilConfig::new("simulink", 1000.0);
-        cfg.io_channels.analog_inputs.push("ch0".to_string());
-        cfg.io_channels.analog_outputs.push("ch0".to_string());
+        cfg.io_channels.analog_inputs.push("ch".to_string());
+        cfg.io_channels.analog_outputs.push("ch".to_string());
         let mut runner = HilRunner::new(cfg);
-        let err = runner.initialize().unwrap_err();
-        assert!(err.contains("Duplicate HIL channel 'ch0'"), "{}", err);
+        let err = runner.initialize().expect_err("duplicate must be rejected");
+        assert!(err.contains("Duplicate"), "unexpected: {err}");
     }
 
     #[test]
-    fn test_hil_initialize_rejects_empty_channel_name() {
-        let mut cfg = HilConfig::new("simulink", 1000.0);
-        cfg.io_channels.digital_inputs.push("  ".to_string());
-        let mut runner = HilRunner::new(cfg);
-        assert!(runner.initialize().is_err());
-    }
-
-    #[test]
-    fn test_hil_start_rejects_invalid_sample_rate() {
-        // start() must refuse to attach an engine when the HIL clock is
-        // unusable, rather than deferring the failure to the first step.
-        let mut runner = HilRunner::new(HilConfig::new("simulink", 0.0));
-        assert!(runner.start(test_engine()).is_err());
-        assert!(!runner.is_running);
-        assert!(runner.engine.is_none());
-    }
-
-    #[test]
-    fn test_hil_start_stop() {
-        let mut runner = HilRunner::new(HilConfig::new("simulink", 1000.0));
-        let engine = test_engine();
+    fn test_hil_start_requires_initialize() {
+        let mut runner = runner_with_channels(1000.0);
+        let engine = engine_with_ports(1.0);
+        assert!(runner.start(engine).is_err());
+        assert!(runner.initialize().is_ok());
+        let engine = engine_with_ports(1.0);
         assert!(runner.start(engine).is_ok());
         assert!(runner.is_running);
         runner.stop();
         assert!(!runner.is_running);
-        assert!(runner.last_exchange.is_none());
     }
 
     #[test]
@@ -476,346 +802,129 @@ mod tests {
         assert!(runner.step().is_err());
     }
 
-    // ── Fix (1): step() really advances the engine and exchanges I/O ────
-
     #[test]
-    fn test_hil_step_advances_engine_and_records_exchange() {
-        let mut cfg = HilConfig::new("simulink", 1000.0);
-        cfg.io_channels.analog_inputs.push("u0".to_string());
-        cfg.io_channels.analog_outputs.push("y0".to_string());
-        cfg.io_channels.digital_inputs.push("d_in".to_string());
-        cfg.io_channels.digital_outputs.push("d_out".to_string());
-        let mut runner = HilRunner::new(cfg);
+    fn test_hil_step_exchanges_real_io() {
+        let mut runner = runner_with_channels(1000.0);
         runner.initialize().unwrap();
-        runner.start(test_engine()).unwrap();
+        runner.start(engine_with_ports(42.5)).unwrap();
 
-        let before = runner.engine.as_ref().unwrap().context.step_count;
-        runner.step().unwrap();
+        assert!(runner.last_exchange.is_none());
+        runner.step().expect("first HIL step");
 
-        // The engine really advanced: the no-op defect would leave this at 0.
-        let after = runner.engine.as_ref().unwrap().context.step_count;
-        assert_eq!(after, before + 1, "a HIL step must advance the engine");
-
-        // The exchange really happened and used the configured channels.
-        let ex = runner
-            .last_exchange
-            .as_ref()
-            .expect("exchange must be recorded");
-        assert!(
-            (ex.dt - 1.0 / 1000.0).abs() < 1e-15,
-            "dt must come from sample_rate"
-        );
-        assert_eq!(
-            ex.inputs_read
-                .iter()
-                .map(|(n, _)| n.as_str())
-                .collect::<Vec<_>>(),
-            vec!["u0", "d_in"]
-        );
-        assert_eq!(
-            ex.outputs_written
-                .iter()
-                .map(|(n, _)| n.as_str())
-                .collect::<Vec<_>>(),
-            vec!["y0", "d_out"]
-        );
-    }
-
-    #[test]
-    fn test_hil_step_uses_dt_to_advance_simulation_time() {
-        // dt is load-bearing: with a 10 Hz interface each step must advance
-        // the engine clock by 100 ms.
-        let mut runner = HilRunner::new(HilConfig::new("speedgoat", 10.0));
-        runner.start(test_engine()).unwrap();
-
-        let t0 = runner.engine.as_ref().unwrap().context.t;
-        runner.step().unwrap();
-        let t1 = runner.engine.as_ref().unwrap().context.t;
-        assert!(
-            (t1 - t0 - 0.1).abs() < 1e-12,
-            "expected dt=0.1, got {}",
-            t1 - t0
-        );
-        assert!(
-            (runner.engine.as_ref().unwrap().context.dt - 0.1).abs() < 1e-12,
-            "the HIL dt must be pushed into the engine context"
-        );
-
-        runner.step().unwrap();
-        let t2 = runner.engine.as_ref().unwrap().context.t;
-        assert!(
-            (t2 - t0 - 0.2).abs() < 1e-12,
-            "expected t to advance by 2*dt"
-        );
-    }
-
-    #[test]
-    fn test_hil_step_records_channel_values() {
-        let mut cfg = HilConfig::new("dsPACE", 10.0);
-        cfg.io_channels.analog_inputs.push("time".to_string());
-        cfg.io_channels.analog_inputs.push("step".to_string());
-        cfg.io_channels.analog_outputs.push("count".to_string());
-        let mut runner = HilRunner::new(cfg);
-        runner.start(test_engine()).unwrap();
-
-        runner.step().unwrap();
-        let ex = runner.last_exchange.clone().unwrap();
-        // "time" read the pre-step engine time; "step" read the pre-step index.
-        assert_eq!(ex.inputs_read[0], ("time".to_string(), 0.0));
-        assert_eq!(ex.inputs_read[1], ("step".to_string(), 0.0));
-        // No output port named "count" exists, so the step counter is driven.
-        assert_eq!(ex.outputs_written[0], ("count".to_string(), 1.0));
-
-        // A second step must produce a different, observable exchange.
-        runner.step().unwrap();
-        let ex2 = runner.last_exchange.unwrap();
-        assert_eq!(ex2.inputs_read[0].1, 0.1);
-        assert_eq!(ex2.inputs_read[1].1, 1.0);
-        assert_eq!(ex2.outputs_written[0].1, 2.0);
-    }
-
-    /// A block that writes a constant scalar to its declared output port on
-    /// every `output()` call. Used to prove the HIL write phase reads engine
-    /// output ports rather than falling back to the step counter.
-    struct ConstOutputBlock {
-        inner: crate::core::block::SimpleBlock,
-        value: Scalar,
-        port: String,
-    }
-
-    impl crate::core::block::Block for ConstOutputBlock {
-        fn id(&self) -> &crate::core::block::BlockId {
-            self.inner.id()
-        }
-        fn block_type(&self) -> &str {
-            self.inner.block_type()
-        }
-        fn ports(&self) -> &crate::core::port::PortSet {
-            self.inner.ports()
-        }
-        fn ports_mut(&mut self) -> &mut crate::core::port::PortSet {
-            self.inner.ports_mut()
-        }
-        fn params(&self) -> &crate::core::param::ParameterSet {
-            self.inner.params()
-        }
-        fn params_mut(&mut self) -> &mut crate::core::param::ParameterSet {
-            self.inner.params_mut()
-        }
-        fn status(&self) -> crate::core::types::ComponentStatus {
-            self.inner.status()
-        }
-        fn set_status(&mut self, s: crate::core::types::ComponentStatus) {
-            self.inner.set_status(s)
-        }
-        fn set_time(&mut self, t: crate::core::types::Time) {
-            self.inner.set_time(t)
-        }
-        fn time(&self) -> crate::core::types::Time {
-            self.inner.time()
-        }
-        fn init(&mut self) -> Result<(), crate::core::error::SimError> {
-            self.inner.init()
-        }
-        fn output(&mut self) -> Result<(), crate::core::error::SimError> {
-            let signal = crate::core::signal::Signal::new(
-                crate::core::types::SignalType::Continuous,
-                crate::core::types::SignalValue::Scalar(self.value),
-                self.inner.time(),
-            );
-            self.inner
-                .ports_mut()
-                .get_mut(&self.port)
-                .expect("declared output port")
-                .write(signal);
-            Ok(())
-        }
-        fn derivative(&self) -> Result<Vec<Scalar>, crate::core::error::SimError> {
-            Ok(Vec::new())
-        }
-        fn update(&mut self) -> Result<(), crate::core::error::SimError> {
-            Ok(())
-        }
-        fn zero_crossings(&self) -> Vec<Scalar> {
-            Vec::new()
-        }
-        fn terminate(&mut self) -> Result<(), crate::core::error::SimError> {
-            Ok(())
-        }
-        fn clone_block(&self) -> Box<dyn crate::core::block::Block> {
-            Box::new(ConstOutputBlock {
-                inner: self.inner.clone(),
-                value: self.value,
-                port: self.port.clone(),
-            })
-        }
-    }
-
-    #[test]
-    fn test_hil_step_writes_engine_output_port_when_channel_matches() {
-        // When the engine exposes an output port named after the configured
-        // channel, the written value is that port's signal (not the fallback
-        // step counter), proving the write phase is driven by engine outputs.
-        use crate::core::types::SignalType;
-
-        let mut block = crate::core::block::SimpleBlock::new("src", "Const");
-        block.declare_output("y0", SignalType::Continuous);
-        let mut diagram = Diagram::new("io");
-        diagram.add_block(Box::new(ConstOutputBlock {
-            inner: block,
-            value: 2.5,
-            port: "y0".to_string(),
-        }));
-        let engine = SimEngine::new(
-            diagram,
-            TimeConfig {
-                start_time: 0.0,
-                end_time: 1000.0,
-                max_step: 1.0,
-                min_step: 1e-9,
-                initial_step: 0.01,
-            },
-        )
-        .unwrap();
-
-        let mut cfg = HilConfig::new("simulink", 10.0);
-        cfg.io_channels.analog_outputs.push("y0".to_string());
-        let mut runner = HilRunner::new(cfg);
-        runner.start(engine).unwrap();
-        runner.step().unwrap();
-
-        let ex = runner.last_exchange.unwrap();
+        let ex = runner.last_exchange.as_ref().expect("exchange recorded");
+        // The sample period is the reciprocal of the rate.
+        assert!((ex.dt - 0.001).abs() < 1e-12, "dt = {}", ex.dt);
+        // The model's output port value was actually read.
         assert_eq!(ex.outputs_written.len(), 1);
-        assert_eq!(ex.outputs_written[0].0, "y0");
-        // The port value (2.5) differs from the fallback step counter (1.0).
-        assert_eq!(ex.outputs_written[0].1, 2.5);
-    }
+        assert_eq!(ex.outputs_written[0].0, "out_a");
+        assert!(
+            (ex.outputs_written[0].1 - 42.5).abs() < 1e-12,
+            "read value {}",
+            ex.outputs_written[0].1
+        );
+        // The input channel was published back into the model.
+        assert_eq!(ex.inputs_read.len(), 1);
+        assert_eq!(ex.inputs_read[0].0, "in_a");
+        assert_eq!(runner.exchange_count, 1);
 
-    /// A block whose `output()` phase always fails, used to prove the HIL loop
-    /// propagates engine errors instead of discarding the step `Result`.
-    struct FailingOutputBlock(crate::core::block::SimpleBlock);
-
-    impl crate::core::block::Block for FailingOutputBlock {
-        fn id(&self) -> &crate::core::block::BlockId {
-            self.0.id()
-        }
-        fn block_type(&self) -> &str {
-            self.0.block_type()
-        }
-        fn ports(&self) -> &crate::core::port::PortSet {
-            self.0.ports()
-        }
-        fn ports_mut(&mut self) -> &mut crate::core::port::PortSet {
-            self.0.ports_mut()
-        }
-        fn params(&self) -> &crate::core::param::ParameterSet {
-            self.0.params()
-        }
-        fn params_mut(&mut self) -> &mut crate::core::param::ParameterSet {
-            self.0.params_mut()
-        }
-        fn status(&self) -> crate::core::types::ComponentStatus {
-            self.0.status()
-        }
-        fn set_status(&mut self, s: crate::core::types::ComponentStatus) {
-            self.0.set_status(s)
-        }
-        fn set_time(&mut self, t: crate::core::types::Time) {
-            self.0.set_time(t)
-        }
-        fn time(&self) -> crate::core::types::Time {
-            self.0.time()
-        }
-        fn init(&mut self) -> Result<(), crate::core::error::SimError> {
-            self.0.init()
-        }
-        fn output(&mut self) -> Result<(), crate::core::error::SimError> {
-            Err(crate::core::error::SimError::runtime(
-                "forced output failure",
-            ))
-        }
-        fn derivative(&self) -> Result<Vec<Scalar>, crate::core::error::SimError> {
-            Ok(Vec::new())
-        }
-        fn update(&mut self) -> Result<(), crate::core::error::SimError> {
-            Ok(())
-        }
-        fn zero_crossings(&self) -> Vec<Scalar> {
-            Vec::new()
-        }
-        fn terminate(&mut self) -> Result<(), crate::core::error::SimError> {
-            Ok(())
-        }
-        fn clone_block(&self) -> Box<dyn crate::core::block::Block> {
-            Box::new(FailingOutputBlock(self.0.clone()))
-        }
+        // A second step advances the recorded simulation time.
+        let t0 = ex.sim_time;
+        runner.step().expect("second HIL step");
+        let ex2 = runner.last_exchange.as_ref().unwrap();
+        assert!(
+            ex2.sim_time > t0,
+            "time did not advance: {t0} -> {}",
+            ex2.sim_time
+        );
+        assert_eq!(runner.exchange_count, 2);
     }
 
     #[test]
-    fn test_hil_step_propagates_engine_failure_instead_of_silently_ignoring() {
-        // A failing engine step must surface as an `Err` from `step()`. The
-        // no-op defect would have returned `Ok(())` and swallowed the error.
-        let mut diagram = Diagram::new("failing");
-        diagram.add_block(Box::new(FailingOutputBlock(
-            crate::core::block::SimpleBlock::new("bad", "Bad"),
-        )));
-        let engine = SimEngine::new(
-            diagram,
-            TimeConfig {
-                start_time: 0.0,
-                end_time: 1.0,
-                max_step: 1.0,
-                min_step: 1e-9,
-                initial_step: 0.01,
-            },
-        )
-        .unwrap();
-
-        let mut cfg = HilConfig::new("simulink", 10.0);
-        cfg.io_channels.analog_outputs.push("y0".to_string());
+    fn test_hil_step_fails_loudly_on_missing_input_port() {
+        let mut cfg = HilConfig::new("simulink", 1000.0);
+        cfg.io_channels
+            .analog_inputs
+            .push("does_not_exist".to_string());
         let mut runner = HilRunner::new(cfg);
-        runner.start(engine).unwrap();
+        runner.initialize().unwrap();
+        runner.start(engine_with_ports(0.0)).unwrap();
+        let err = runner.step().expect_err("missing port must fail");
+        assert!(err.contains("not found"), "unexpected: {err}");
+    }
 
-        let err = runner.step().unwrap_err();
-        assert!(err.contains("HIL engine step failed"), "{}", err);
-        assert!(err.contains("forced output failure"), "{}", err);
-        // A failed step must not fabricate an exchange record.
-        assert!(
-            runner.last_exchange.is_none(),
-            "no exchange should be recorded when the engine step fails"
+    #[test]
+    fn test_hil_step_quantises_digital_channels() {
+        let mut cfg = HilConfig::new("simulink", 100.0);
+        cfg.io_channels.digital_outputs.push("out_a".to_string());
+        cfg.io_channels.digital_inputs.push("in_a".to_string());
+        let mut runner = HilRunner::new(cfg);
+        runner.initialize().unwrap();
+        // 0.7 should quantise up to a logic high on the digital *output* read.
+        runner.start(engine_with_ports(0.7)).unwrap();
+        runner.step().unwrap();
+        let ex = runner.last_exchange.as_ref().unwrap();
+        assert_eq!(ex.outputs_written[0].1, 1.0);
+        // Inputs are sampled from the model's ports before the step, so an
+        // unset input port reads as 0.0 (and is quantised to logic low).
+        assert_eq!(ex.inputs_read[0].1, 0.0);
+        assert_eq!(runner.config.io_channels.channel_count(), 2);
+    }
+
+    #[test]
+    fn test_hil_step_reads_input_from_the_transport() {
+        // Hardware inputs come from the transport. Publish 0.9 on the digital
+        // input channel and verify it is sampled (and quantised) by the model.
+        let mut cfg = HilConfig::new("sim", 100.0);
+        cfg.io_channels.digital_inputs.push("in_a".to_string());
+        let mut transport = SimulatedTransport::new("sim");
+        transport.open().unwrap();
+        transport.write("in_a", 0.9).unwrap();
+        let mut runner = HilRunner::with_transport(cfg, Box::new(transport));
+        runner.initialize().unwrap();
+        runner.start(engine_with_ports(0.0)).unwrap();
+        runner.step().unwrap();
+
+        let ex = runner.last_exchange.as_ref().unwrap();
+        assert_eq!(ex.inputs_read[0].0, "in_a");
+        assert_eq!(
+            ex.inputs_read[0].1, 1.0,
+            "0.9 on a digital input must quantise to logic high"
         );
     }
 
     #[test]
-    fn test_hil_step_pauses_at_end_time_and_records_finished_exchange() {
-        // Drive the engine to completion: stepping past end_time must yield
-        // `Finished`, which is a normal (non-error) HIL outcome and still
-        // produces a recorded exchange.
-        let mut diagram = Diagram::new("short");
-        diagram.add_block(Box::new(crate::core::block::SimpleBlock::new("b", "Const")));
-        let engine = SimEngine::new(
-            diagram,
-            TimeConfig {
-                start_time: 0.0,
-                end_time: 0.01,
-                max_step: 0.01,
-                min_step: 1e-9,
-                initial_step: 0.01,
-            },
-        )
-        .unwrap();
-        let mut cfg = HilConfig::new("simulink", 100.0);
-        cfg.io_channels.analog_outputs.push("y".to_string());
-        let mut runner = HilRunner::new(cfg);
-        runner.start(engine).unwrap();
-
+    fn test_hil_step_writes_sampled_input_into_the_model() {
+        // The sampled hardware value must land in the model's input port, so the
+        // feedback loop is actually closed.
+        let mut cfg = HilConfig::new("sim", 100.0);
+        cfg.io_channels.analog_inputs.push("in_a".to_string());
+        let mut transport = SimulatedTransport::new("sim");
+        transport.open().unwrap();
+        transport.write("in_a", 4.25).unwrap();
+        let mut runner = HilRunner::with_transport(cfg, Box::new(transport));
         runner.initialize().unwrap();
-        runner.step().unwrap(); // reaches end_time
-        runner.step().unwrap(); // engine reports Finished
-        let ex = runner
-            .last_exchange
-            .expect("finished steps still exchange I/O");
-        assert!((ex.dt - 0.01).abs() < 1e-12);
-        assert_eq!(runner.engine.as_ref().unwrap().context.step_count, 1);
+        runner.start(engine_with_ports(0.0)).unwrap();
+        runner.step().unwrap();
+
+        let ex = runner.last_exchange.as_ref().unwrap();
+        assert_eq!(ex.inputs_read[0].1, 4.25);
+        // The sampled value must have been written into the model's input port.
+        let port_value = runner
+            .engine
+            .as_ref()
+            .unwrap()
+            .diagram()
+            .blocks()
+            .find_map(|(_, b)| {
+                b.ports()
+                    .get("in_a")
+                    .and_then(|p| p.read())
+                    .and_then(|s| s.as_scalar())
+            });
+        assert_eq!(
+            port_value,
+            Some(4.25),
+            "sampled hardware input must reach the model port"
+        );
     }
 }

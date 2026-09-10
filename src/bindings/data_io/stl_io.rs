@@ -6,6 +6,7 @@ use crate::core::coord::Coord3D;
 use crate::core::types::Scalar;
 
 /// A single STL triangle.
+#[derive(Debug, Clone)]
 pub struct StlTriangle {
     pub normal: [Scalar; 3],
     pub v1: Coord3D,
@@ -13,7 +14,15 @@ pub struct StlTriangle {
     pub v3: Coord3D,
 }
 
+/// Size of the binary STL header (80-byte comment + `u32` triangle count).
+pub const BINARY_HEADER_LEN: usize = 84;
+
+/// Size of one binary STL triangle record (12-byte normal, 3 vertices, 2-byte
+/// attribute word).
+pub const TRIANGLE_RECORD_LEN: usize = 50;
+
 /// STL mesh data.
+#[derive(Debug, Clone)]
 pub struct StlMesh {
     pub triangles: Vec<StlTriangle>,
     pub unit: String,
@@ -34,19 +43,40 @@ impl Default for StlMesh {
     }
 }
 
-/// Import binary STL file.
+/// Import a binary STL file.
+///
+/// Returns an error when the declared triangle count does not match the file
+/// size, instead of silently returning a truncated mesh (the previous behaviour
+/// stopped at the first short record and reported success).
 pub fn import_stl(filepath: &str) -> Result<StlMesh, String> {
     let data = std::fs::read(filepath).map_err(|e| format!("STL read error: {}", e))?;
-    if data.len() < 84 {
-        return Err("Invalid STL file".to_string());
+    if data.len() < BINARY_HEADER_LEN {
+        return Err(format!(
+            "Invalid STL file: {} bytes is shorter than the {}-byte binary header",
+            data.len(),
+            BINARY_HEADER_LEN
+        ));
     }
     let num_triangles = u32::from_le_bytes([data[80], data[81], data[82], data[83]]) as usize;
+
+    // Every triangle is exactly 50 bytes. A mismatch means a truncated or
+    // corrupt file; surfacing it prevents downstream geometry from silently
+    // missing faces.
+    let expected = BINARY_HEADER_LEN + num_triangles * TRIANGLE_RECORD_LEN;
+    if data.len() != expected {
+        return Err(format!(
+            "Truncated STL file: header declares {} triangles ({} bytes expected) \
+             but the file is {} bytes",
+            num_triangles,
+            expected,
+            data.len()
+        ));
+    }
+
     let mut mesh = StlMesh::new();
+    mesh.triangles.reserve(num_triangles);
     for i in 0..num_triangles {
-        let offset = 84 + i * 50;
-        if offset + 50 > data.len() {
-            break;
-        }
+        let offset = BINARY_HEADER_LEN + i * TRIANGLE_RECORD_LEN;
         let n = read_stl_vec3(&data, offset);
         let p1 = read_stl_vec3(&data, offset + 12);
         let p2 = read_stl_vec3(&data, offset + 24);
@@ -83,26 +113,61 @@ fn read_stl_vec3(data: &[u8], offset: usize) -> [Scalar; 3] {
     [x, y, z]
 }
 
-/// Export as binary STL file.
+/// Export as a binary STL file.
+///
+/// Writes `mesh.unit` into the 80-byte header (binary STL has no dedicated unit
+/// field, so the header comment is the conventional place to record it).
+/// Coordinates are written as `f32` because that is what the format mandates.
 pub fn export_stl(mesh: &StlMesh, filepath: &str) -> Result<(), String> {
-    let mut data: Vec<u8> = Vec::new();
-    // 80-byte header
-    data.extend_from_slice(&[0u8; 80]);
+    let count = u32::try_from(mesh.triangles.len()).map_err(|_| {
+        format!(
+            "too many triangles for binary STL: {} exceeds the u32 count field",
+            mesh.triangles.len()
+        )
+    })?;
+
+    // Reject non-finite coordinates: they would be written as `NaN`/`inf`
+    // bit patterns that every consumer silently mis-handles.
+    for (i, tri) in mesh.triangles.iter().enumerate() {
+        for (name, v) in [
+            ("normal", tri.normal),
+            ("v1", [tri.v1.x, tri.v1.y, tri.v1.z]),
+            ("v2", [tri.v2.x, tri.v2.y, tri.v2.z]),
+            ("v3", [tri.v3.x, tri.v3.y, tri.v3.z]),
+        ] {
+            if !v.iter().all(|c| c.is_finite()) {
+                return Err(format!(
+                    "triangle {} has a non-finite {} component ({:?}); refusing to write an \
+                     unreadable STL file",
+                    i, name, v
+                ));
+            }
+        }
+    }
+
+    let mut data: Vec<u8> =
+        Vec::with_capacity(BINARY_HEADER_LEN + mesh.triangles.len() * TRIANGLE_RECORD_LEN);
+    // 80-byte header: unit marker first, zero-padded to 80 bytes.
+    let mut header = [0u8; 80];
+    let unit = format!("scico-rs unit={}", mesh.unit);
+    let bytes = unit.as_bytes();
+    let n = bytes.len().min(80);
+    header[..n].copy_from_slice(&bytes[..n]);
+    data.extend_from_slice(&header);
     // Number of triangles
-    let n = mesh.triangles.len() as u32;
-    data.extend_from_slice(&n.to_le_bytes());
+    data.extend_from_slice(&count.to_le_bytes());
     for tri in &mesh.triangles {
-        for &v in &[
+        for v in [
             tri.normal,
             [tri.v1.x, tri.v1.y, tri.v1.z],
             [tri.v2.x, tri.v2.y, tri.v2.z],
             [tri.v3.x, tri.v3.y, tri.v3.z],
         ] {
-            for &coord in &v {
+            for coord in v {
                 data.extend_from_slice(&(coord as f32).to_le_bytes());
             }
         }
-        data.extend_from_slice(&[0u8; 2]); // attribute
+        data.extend_from_slice(&[0u8; 2]); // attribute byte count
     }
     std::fs::write(filepath, &data).map_err(|e| format!("STL write error: {}", e))
 }
@@ -111,26 +176,125 @@ pub fn export_stl(mesh: &StlMesh, filepath: &str) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    fn scratch(name: &str) -> String {
+        std::env::temp_dir()
+            .join(format!("scico_stl_{}_{}.stl", name, std::process::id()))
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    fn tri(normal: [Scalar; 3]) -> StlTriangle {
+        StlTriangle {
+            normal,
+            v1: Coord3D::new(0.0, 0.0, 0.0),
+            v2: Coord3D::new(1.0, 0.0, 0.0),
+            v3: Coord3D::new(0.0, 1.0, 0.0),
+        }
+    }
+
     #[test]
     fn test_stl_mesh_creation() {
         let m = StlMesh::new();
         assert!(m.triangles.is_empty());
+        assert_eq!(m.unit, "mm");
     }
 
     #[test]
     fn test_export_stl_triangle() {
         let mut mesh = StlMesh::new();
+        mesh.triangles.push(tri([0.0, 0.0, 1.0]));
+        let path = scratch("triangle");
+        assert!(export_stl(&mesh, &path).is_ok());
+        let imported = import_stl(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(imported.triangles.len(), 1);
+        assert_eq!(imported.triangles[0].normal, [0.0, 0.0, 1.0]);
+        assert_eq!(imported.triangles[0].v2.x, 1.0);
+        assert_eq!(imported.triangles[0].v3.y, 1.0);
+    }
+
+    /// The exporter used to write an all-zero header, so the mesh unit was lost.
+    #[test]
+    fn test_stl_roundtrip_preserves_unit_in_header() {
+        let mut mesh = StlMesh::new();
+        mesh.unit = "inch".to_string();
+        mesh.triangles.push(tri([1.0, 0.0, 0.0]));
+        let path = scratch("unit");
+        export_stl(&mesh, &path).unwrap();
+        let raw = std::fs::read(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        let header = String::from_utf8_lossy(&raw[..80]);
+        assert!(
+            header.contains("unit=inch"),
+            "unit must be recorded in the header, got: {header:?}"
+        );
+    }
+
+    #[test]
+    fn test_stl_roundtrip_multiple_triangles_preserves_count() {
+        let mut mesh = StlMesh::new();
+        for i in 0..7 {
+            mesh.triangles.push(tri([i as Scalar, 0.0, 0.0]));
+        }
+        let path = scratch("many");
+        export_stl(&mesh, &path).unwrap();
+        let imported = import_stl(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(imported.triangles.len(), 7, "all triangles must survive");
+        for (i, t) in imported.triangles.iter().enumerate() {
+            assert_eq!(t.normal[0], i as Scalar);
+        }
+    }
+
+    /// The importer used to `break` out of its loop on a short record, silently
+    /// returning a partial mesh while reporting success. It must now refuse.
+    #[test]
+    fn test_import_truncated_stl_is_rejected_not_silently_partial() {
+        let mut mesh = StlMesh::new();
+        for i in 0..4 {
+            mesh.triangles.push(tri([i as Scalar, 0.0, 0.0]));
+        }
+        let path = scratch("truncated");
+        export_stl(&mesh, &path).unwrap();
+
+        // Chop off the last two triangle records, leaving the header intact.
+        let full = std::fs::read(&path).unwrap();
+        let truncated = &full[..BINARY_HEADER_LEN + 2 * TRIANGLE_RECORD_LEN];
+        std::fs::write(&path, truncated).unwrap();
+
+        let err = import_stl(&path).unwrap_err();
+        let _ = std::fs::remove_file(&path);
+        assert!(
+            err.contains("Truncated STL"),
+            "expected an explicit truncation error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_import_stl_shorter_than_header_is_rejected() {
+        let path = scratch("tiny");
+        std::fs::write(&path, [0u8; 10]).unwrap();
+        let err = import_stl(&path).unwrap_err();
+        let _ = std::fs::remove_file(&path);
+        assert!(err.contains("shorter than"), "got: {err}");
+    }
+
+    #[test]
+    fn test_export_stl_rejects_non_finite_coordinates() {
+        let mut mesh = StlMesh::new();
         mesh.triangles.push(StlTriangle {
             normal: [0.0, 0.0, 1.0],
-            v1: Coord3D::new(0.0, 0.0, 0.0),
+            v1: Coord3D::new(Scalar::NAN, 0.0, 0.0),
             v2: Coord3D::new(1.0, 0.0, 0.0),
             v3: Coord3D::new(0.0, 1.0, 0.0),
         });
-        let path = "/tmp/test_export.stl";
-        assert!(export_stl(&mesh, path).is_ok());
-        let imported = import_stl(path).unwrap();
-        assert_eq!(imported.triangles.len(), 1);
-        let _ = std::fs::remove_file(path);
+        let path = scratch("nan");
+        let err = export_stl(&mesh, &path).unwrap_err();
+        let _ = std::fs::remove_file(&path);
+        assert!(
+            err.contains("non-finite"),
+            "expected a non-finite rejection, got: {err}"
+        );
     }
 
     #[test]

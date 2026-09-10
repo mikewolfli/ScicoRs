@@ -167,8 +167,16 @@ pub mod py_simulation {
 
         let trimmed = diagram_json.trim();
         if !trimmed.is_empty() && trimmed != "{}" {
-            let diagram =
+            let mut diagram =
                 crate::core::diagram_ser::json_to_diagram(trimmed).map_err(|e| e.to_string())?;
+            // A deserialized diagram holds placeholder blocks that preserve the
+            // type name but have no runtime behaviour. Rebuild them from the
+            // built-in factory so the loaded model can actually be simulated.
+            let mut factory = crate::blocks::BlockFactory::new();
+            crate::blocks::register_builtin_blocks(&mut factory);
+            factory
+                .reconstruct(&mut diagram)
+                .map_err(|e| e.to_string())?;
             return run_diagram(diagram, config);
         }
 
@@ -462,8 +470,14 @@ mod tests {
             "version": 1,
             "schema": "scico-rs/diagram/v1",
             "blocks": [
-                {"id": "src", "block_type": "ConstantSource", "parameters": [{"name": "value", "value": 5.0, "mutable": true}]},
-                {"id": "gain", "block_type": "Gain", "parameters": [{"name": "k", "value": 2.0, "mutable": true}]}
+                {"id": "src", "block_type": "ConstantSource",
+                 "parameters": [{"name": "value", "type": "scalar", "value": 5.0, "mutability": "config"}],
+                 "ports": [{"id": "out", "direction": "output", "signal_type": "continuous"}]},
+                {"id": "gain", "block_type": "Gain",
+                 "parameters": [{"name": "k", "type": "scalar", "value": 2.0, "mutability": "config"}],
+                 "ports": [
+                    {"id": "u", "direction": "input", "signal_type": "continuous"},
+                    {"id": "y", "direction": "output", "signal_type": "continuous"}]}
             ],
             "links": [
                 {"id": "l1", "source_block": "src", "source_port": "out", "dest_block": "gain", "dest_port": "u", "delay": 0.0}
@@ -472,6 +486,71 @@ mod tests {
         let summary = run_simulation(diagram_json, r#"{"end_time": 1.0}"#).unwrap();
         let v: serde_json::Value = serde_json::from_str(&summary).unwrap();
         assert_eq!(v["status"], "completed");
+    }
+
+    /// A diagram saved by `diagram_to_json` must be loadable *and* simulatable:
+    /// the loader has to turn placeholder blocks back into real implementations
+    /// through the block factory.
+    #[test]
+    fn test_saved_diagram_roundtrips_into_a_runnable_simulation() {
+        use crate::core::diagram::Diagram;
+        use crate::core::link::Link;
+
+        // Build a real diagram with the actual block implementations.
+        // Concrete blocks already declare their own ports in `new()`.
+        let mut original = Diagram::new("roundtrip");
+        let src = crate::blocks::ConstantSource::new("src", SignalValue::Scalar(5.0));
+        let gain = crate::blocks::Gain::new("gain", 2.0);
+        original.add_block(Box::new(src));
+        original.add_block(Box::new(gain));
+        original.add_link(Link::new("l1", "src", "out", "gain", "u"));
+
+        let json = crate::core::diagram_ser::diagram_to_json(&original).unwrap();
+
+        // Loading alone yields placeholder blocks...
+        let mut loaded = crate::core::diagram_ser::json_to_diagram(&json).unwrap();
+        assert_eq!(loaded.block_count(), 2);
+        // ...and the factory turns them back into simulatable blocks.
+        let mut factory = crate::blocks::BlockFactory::new();
+        crate::blocks::register_builtin_blocks(&mut factory);
+        let n = factory.reconstruct(&mut loaded).unwrap();
+        assert_eq!(n, 2);
+        assert_eq!(
+            loaded.get_block("src").unwrap().block_type(),
+            "ConstantSource"
+        );
+        assert_eq!(loaded.get_block("gain").unwrap().block_type(), "Gain");
+
+        // The reconstructed model must actually run.
+        let summary = run_diagram(loaded, parse_time_config(r#"{"end_time": 0.1}"#).unwrap())
+            .expect("a reconstructed diagram must be simulatable");
+        let v: serde_json::Value = serde_json::from_str(&summary).unwrap();
+        assert_eq!(v["status"], "completed");
+    }
+
+    /// An unregistered block type must fail loudly rather than silently
+    /// producing a diagram whose blocks do nothing.
+    #[test]
+    fn test_reconstruct_rejects_unknown_block_type() {
+        use crate::core::diagram::Diagram;
+
+        let mut d = Diagram::new("unknown");
+        d.add_block(Box::new(crate::core::block::SimpleBlock::new(
+            "x",
+            "NoSuchBlock",
+        )));
+        let mut factory = crate::blocks::BlockFactory::new();
+        crate::blocks::register_builtin_blocks(&mut factory);
+        let err = factory.reconstruct(&mut d).unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("NoSuchBlock"),
+            "the unknown type must be named in the error, got: {msg}"
+        );
+        assert!(
+            msg.contains("no constructor registered"),
+            "the failure reason must be explicit, got: {msg}"
+        );
     }
 
     #[test]

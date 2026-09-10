@@ -135,7 +135,74 @@ mod tests {
     use crate::domains::optical::ray::Ray;
     #[test]
     fn test_tracer_new() {
-        let _t = NonSequentialRayTracer::new(10);
+        // A freshly built tracer must carry the requested bounce budget and start
+        // with no objects or rays.
+        let t = NonSequentialRayTracer::new(10);
+        assert_eq!(t.max_bounces, 10);
+        assert!(t.objects.is_empty());
+        assert!(t.rays.is_empty());
+    }
+
+    #[test]
+    fn test_tracer_trace_with_no_objects_keeps_ray() {
+        // A ray in an empty scene cannot intersect anything, so it survives the
+        // trace unchanged.
+        let mut t = NonSequentialRayTracer::new(5);
+        t.add_ray(Ray::new(
+            Coord3D::new(0.0, 0.0, -1.0),
+            Coord3D::new(0.0, 0.0, 1.0),
+            500e-9,
+        ));
+        t.trace().expect("trace should succeed");
+        assert_eq!(t.rays.len(), 1);
+        assert!((t.rays[0].direction.z - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_tracer_bounces_off_mirror_and_terminates() {
+        let mut t = NonSequentialRayTracer::new(2);
+        // A mirror facing the incoming ray reverses its z direction on each hit.
+        t.add_object(Box::new(FlatMirrorObj {
+            centre: Coord3D::new(0.0, 0.0, 0.0),
+            normal: Coord3D::new(0.0, 0.0, 1.0),
+        }));
+        t.add_ray(Ray::new(
+            Coord3D::new(0.0, 0.0, -1.0),
+            Coord3D::new(0.0, 0.0, 1.0),
+            500e-9,
+        ));
+        t.trace().expect("trace should succeed");
+
+        // Single-bounce reference: one reflection must flip the ray's z travel.
+        let m = FlatMirrorObj {
+            centre: Coord3D::new(0.0, 0.0, 0.0),
+            normal: Coord3D::new(0.0, 0.0, 1.0),
+        };
+        let incoming = Ray::new(
+            Coord3D::new(0.0, 0.0, -1.0),
+            Coord3D::new(0.0, 0.0, 1.0),
+            500e-9,
+        );
+        let hit = m.intersect(&incoming).expect("ray must hit the mirror");
+        let reflected = m.scatter(&incoming, &hit);
+        assert_eq!(reflected.len(), 1);
+        assert!((reflected[0].direction.z + 1.0).abs() < 1e-10);
+
+        // With two bounces the ray reflects twice, so it ends travelling +z
+        // again. Exactly one ray must remain, proving the bounce loop
+        // terminated at `max_bounces` instead of diverging.
+        assert_eq!(t.max_bounces, 2);
+        assert_eq!(
+            t.rays.len(),
+            1,
+            "bounce loop produced {} rays",
+            t.rays.len()
+        );
+        assert!(
+            (t.rays[0].direction.z - 1.0).abs() < 1e-10,
+            "two reflections should restore +z, got {}",
+            t.rays[0].direction.z
+        );
     }
     #[test]
     fn test_mirror_intersect() {

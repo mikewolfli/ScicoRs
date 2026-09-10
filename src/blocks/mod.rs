@@ -11,13 +11,17 @@
 //! - **continuous**: integrator, PID, transfer function, state-space
 //! - **discrete_ctrl**: unit delay, discrete filter, discrete PID
 //! - **sinks**: scope, data recorder, display
+//! - **factory**: type-name registry for reconstructing deserialized diagrams
 
 pub mod continuous;
 pub mod discrete_ctrl;
+pub mod factory;
 pub mod logic;
 pub mod math;
 pub mod sinks;
 pub mod sources;
+
+pub use factory::{BlockFactory, register_builtin_blocks};
 
 pub use continuous::{Integrator, PIDController, StateSpaceSystem, TransferFunction};
 pub use discrete_ctrl::{DiscreteFilter, DiscreteIntegratorBlock, DiscretePID, UnitDelay};

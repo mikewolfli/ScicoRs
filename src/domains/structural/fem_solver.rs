@@ -38,6 +38,19 @@ enum StiffnessContribution {
 ///
 /// Stores nodal coordinates, element definitions, constraints (boundary
 /// conditions), and nodal loads.
+///
+/// # Element connectivity
+///
+/// An element's stiffness matrix is expressed in *local* degrees of freedom,
+/// so assembling it requires knowing which global nodes it spans. That mapping
+/// is held in [`FemSystem::element_nodes`], indexed in parallel with
+/// `elements`: `element_nodes[e]` lists the global node indices of element `e`,
+/// in the element's DOF order. Register it with [`FemSystem::connect`].
+///
+/// When a system has no connectivity recorded for an element, assembly falls
+/// back to the legacy layout that places the element block at the first free
+/// slot — correct only for single-element models, and retained so existing
+/// callers keep working. New code should always call `connect`.
 #[derive(Debug, Clone)]
 pub struct FemSystem {
     /// Nodal coordinates.
@@ -48,6 +61,10 @@ pub struct FemSystem {
     pub constraints: Vec<(usize, usize, Scalar)>,
     /// Nodal loads: (node_index, dof, force_magnitude).
     pub loads: Vec<(usize, usize, Scalar)>,
+    /// Connectivity: `element_nodes[e]` lists the global node indices of
+    /// element `e`, in the element's local DOF order. Empty or shorter than
+    /// `elements` means connectivity is unknown for those elements.
+    pub element_nodes: Vec<Vec<usize>>,
 }
 
 impl FemSystem {
@@ -58,7 +75,44 @@ impl FemSystem {
             elements: Vec::new(),
             constraints: Vec::new(),
             loads: Vec::new(),
+            element_nodes: Vec::new(),
         }
+    }
+
+    /// Number of nodes spanned by each element kind, in local DOF order.
+    ///
+    /// Truss/spring span two nodes, beam two (3 translations + 3 rotations
+    /// each), shell and solid four and eight respectively.
+    fn required_nodes(elem: &FemElement) -> usize {
+        match elem {
+            FemElement::Truss(_) | FemElement::Spring(_) | FemElement::Beam(_) => 2,
+            FemElement::Shell(_) => 4,
+            FemElement::Solid(_) => 8,
+        }
+    }
+
+    /// Record the node connectivity of one element and append the element.
+    ///
+    /// `nodes` lists the global node indices in the element's local DOF order.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the element kind needs a different node count, or when an
+    /// index is out of range — both are programming errors that would otherwise
+    /// silently corrupt the assembled system.
+    pub fn connect(&mut self, elem: FemElement, nodes: &[usize]) -> usize {
+        let expected = Self::required_nodes(&elem);
+        assert!(
+            nodes.len() == expected,
+            "element kind needs {expected} nodes but {} were supplied",
+            nodes.len()
+        );
+        for &n in nodes {
+            assert!(n < self.nodes.len(), "connect: node index {n} out of range");
+        }
+        self.elements.push(elem);
+        self.element_nodes.push(nodes.to_vec());
+        self.elements.len() - 1
     }
 
     /// Determine the total number of DOFs in the system.
@@ -66,10 +120,117 @@ impl FemSystem {
         self.nodes.len() * 6 // conservative: 6 DOFs per node
     }
 
+    /// Element stiffness DOF layout: how many local DOFs each element kind has.
+    fn element_dofs(elem: &FemElement) -> usize {
+        match elem {
+            // [u1, v1, u2, v2]
+            FemElement::Truss(_) => 4,
+            // Spring acts on the two translational DOFs of its nodes.
+            FemElement::Spring(_) => 2,
+            // 12 = 6 per node (3 translation + 3 rotation)
+            FemElement::Beam(_) => 12,
+            // 24 = 6 per node × 4 nodes
+            FemElement::Shell(_) => 24,
+            // 24 = 3 per node × 8 nodes
+            FemElement::Solid(_) => 24,
+        }
+    }
+
+    /// Global DOF indices an element occupies, in local DOF order.
+    ///
+    /// Returns `None` when connectivity is unknown for this element, so the
+    /// caller can fall back to the legacy layout.
+    fn element_dof_indices(&self, index: usize) -> Option<Vec<usize>> {
+        let nodes = self.element_nodes.get(index)?;
+        let elem = self.elements.get(index)?;
+        let local = Self::element_dofs(elem);
+        match elem {
+            // Truss/beam/shell map 6 DOFs (or 2 for truss) onto each node; the
+            // truss carries per-node 2-DOF pairs and the solid 3-DOF triples.
+            FemElement::Truss(_) => {
+                if nodes.len() != 2 {
+                    return None;
+                }
+                Some(vec![
+                    nodes[0] * 6,
+                    nodes[0] * 6 + 1,
+                    nodes[1] * 6,
+                    nodes[1] * 6 + 1,
+                ])
+            }
+            FemElement::Spring(_) => {
+                if nodes.len() != 2 {
+                    return None;
+                }
+                Some(vec![nodes[0] * 6, nodes[1] * 6])
+            }
+            FemElement::Beam(_) => {
+                if nodes.len() != 2 {
+                    return None;
+                }
+                let mut dofs = Vec::with_capacity(local);
+                for &n in nodes {
+                    for d in 0..6 {
+                        dofs.push(n * 6 + d);
+                    }
+                }
+                Some(dofs)
+            }
+            FemElement::Shell(_) => {
+                if nodes.len() != 4 {
+                    return None;
+                }
+                let mut dofs = Vec::with_capacity(local);
+                for &n in nodes {
+                    for d in 0..6 {
+                        dofs.push(n * 6 + d);
+                    }
+                }
+                Some(dofs)
+            }
+            FemElement::Solid(_) => {
+                if nodes.len() != 8 {
+                    return None;
+                }
+                // Solids carry 3 translational DOFs per node; the rotational
+                // slots (3..6) of each node are not activated.
+                let mut dofs = Vec::with_capacity(local);
+                for &n in nodes {
+                    for d in 0..3 {
+                        dofs.push(n * 6 + d);
+                    }
+                }
+                Some(dofs)
+            }
+        }
+    }
+
+    /// Scatter a local element matrix into the global matrix at `dofs`.
+    fn scatter(k_global: &mut [Vec<Scalar>], k_local: &[Vec<Scalar>], dofs: &[usize]) {
+        let n_dof = k_global.len();
+        for (a, &gi) in dofs.iter().enumerate() {
+            if gi >= n_dof || a >= k_local.len() {
+                continue;
+            }
+            for (b, &gj) in dofs.iter().enumerate() {
+                if gj >= n_dof || b >= k_local[a].len() {
+                    continue;
+                }
+                k_global[gi][gj] += k_local[a][b];
+            }
+        }
+    }
+
     /// Assemble the global stiffness matrix.
     ///
     /// Element stiffness matrices are computed in parallel (using rayon)
     /// then assembled serially into the global n_dofs × n_dofs matrix.
+    ///
+    /// Elements registered through [`Self::connect`] are scattered to their
+    /// true global DOFs, so a multi-element mesh assembles correctly even when
+    /// elements share nodes (their contributions are summed, as the finite
+    /// element method requires). Elements without connectivity fall back to the
+    /// legacy single-element layout.
     pub fn assemble_stiffness(&self) -> Vec<Vec<Scalar>> {
         let n_dof = self.n_dofs();
         if n_dof == 0 {
@@ -90,19 +251,38 @@ impl FemSystem {
             })
             .collect();
 
-        // Phase 2: Assemble serially into the global matrix
+        // Phase 2: Assemble serially into the global matrix. Connected elements
+        // scatter to their real DOFs; the rest keep the legacy layout.
         let mut k_global = vec![vec![0.0; n_dof]; n_dof];
-        for contrib in &contributions {
-            match contrib {
-                StiffnessContribution::Beam(k) => Self::assemble_beam(&mut k_global, k),
-                StiffnessContribution::Truss(k) => Self::assemble_truss(&mut k_global, k),
-                StiffnessContribution::Spring(k) => Self::assemble_spring(&mut k_global, *k),
-                StiffnessContribution::Shell(k) => Self::assemble_shell(&mut k_global, k),
-                StiffnessContribution::Solid(k) => Self::assemble_solid(&mut k_global, k),
+        for (i, contrib) in contributions.iter().enumerate() {
+            match self.element_dof_indices(i) {
+                Some(dofs) => match contrib {
+                    StiffnessContribution::Truss(k)
+                    | StiffnessContribution::Beam(k)
+                    | StiffnessContribution::Shell(k)
+                    | StiffnessContribution::Solid(k) => Self::scatter(&mut k_global, k, &dofs),
+                    // A spring is stored as a scalar and expanded on the fly.
+                    StiffnessContribution::Spring(k) => {
+                        let kl = Self::spring_matrix(*k);
+                        Self::scatter(&mut k_global, &kl, &dofs);
+                    }
+                },
+                None => match contrib {
+                    StiffnessContribution::Beam(k) => Self::assemble_beam(&mut k_global, k),
+                    StiffnessContribution::Truss(k) => Self::assemble_truss(&mut k_global, k),
+                    StiffnessContribution::Spring(k) => Self::assemble_spring(&mut k_global, *k),
+                    StiffnessContribution::Shell(k) => Self::assemble_shell(&mut k_global, k),
+                    StiffnessContribution::Solid(k) => Self::assemble_solid(&mut k_global, k),
+                },
             }
         }
 
         k_global
+    }
+
+    /// Local stiffness matrix of a spring acting between two 1-DOF nodes.
+    fn spring_matrix(k: Scalar) -> Vec<Vec<Scalar>> {
+        vec![vec![k, -k], vec![-k, k]]
     }
 
     /// Assemble beam element (12×12 → global).
@@ -402,17 +582,24 @@ impl FemSystem {
         // to the axial load distribution.
         let mut kg = vec![vec![0.0; n]; n];
 
-        // Apply geometric stiffness based on axial load in elements
+        // Apply geometric stiffness based on axial load in elements, placed at
+        // the element's true DOFs when connectivity is known.
         for (i, elem) in self.elements.iter().enumerate() {
             let axial_force = match elem {
                 FemElement::Truss(te) => te.material.young_modulus * te.area * 1e-4,
                 FemElement::Beam(be) => be.material.young_modulus * be.area * 1e-4,
                 _ => 1e6, // reference force for other elements
             };
-            let base_idx = i * 6;
-            if base_idx + 1 < n {
-                kg[base_idx][base_idx] += axial_force;
-                kg[base_idx + 1][base_idx + 1] += axial_force;
+            let dofs = self.element_dof_indices(i);
+            let (a, b) = match &dofs {
+                // With connectivity, stiffen the element's own translational DOFs.
+                Some(d) if d.len() >= 2 => (d[0], d[1]),
+                // Legacy layout: the element block starts at `i * 6`.
+                _ => (i * 6, i * 6 + 1),
+            };
+            if a < n && b < n {
+                kg[a][a] += axial_force;
+                kg[b][b] += axial_force;
             }
         }
 
@@ -568,6 +755,108 @@ mod tests {
         }));
         let k = sys.assemble_stiffness();
         assert_eq!(k.len(), 12);
+    }
+
+    #[test]
+    fn test_connected_truss_shares_node_coupling() {
+        // Two trusses in series over 3 nodes. With real connectivity the shared
+        // middle node must receive contributions from BOTH elements, which the
+        // legacy "first free block" layout could never produce.
+        let mat = steel_structural();
+        let k0 = mat.young_modulus * 0.01 / 1.0;
+        let mut sys = FemSystem::new();
+        for i in 0..3 {
+            sys.nodes.push(Coord3D::new(i as Scalar, 0.0, 0.0));
+        }
+        let truss = || {
+            FemElement::Truss(TrussElement {
+                length: 1.0,
+                area: 0.01,
+                material: mat,
+            })
+        };
+        sys.connect(truss(), &[0, 1]);
+        sys.connect(truss(), &[1, 2]);
+
+        let k = sys.assemble_stiffness();
+        assert_eq!(k.len(), 18);
+        // Element 1 occupies node 1 DOF 0 (index 6) and node 2 DOF 0 (index 12).
+        // Each element contributes k0 at its end nodes, so the shared node 1
+        // must sum to exactly 2·k0 — the key evidence that connectivity is used.
+        assert!(
+            (k[6][6] - 2.0 * k0).abs() < 1e-6 * k0,
+            "shared node stiffness {} != {}",
+            k[6][6],
+            2.0 * k0
+        );
+        // End nodes only see their own element.
+        assert!((k[0][0] - k0).abs() < 1e-6 * k0);
+        assert!((k[12][12] - k0).abs() < 1e-6 * k0);
+        // Off-diagonal coupling exists between the shared node and each end.
+        assert!((k[0][6] + k0).abs() < 1e-6 * k0);
+        assert!((k[6][12] + k0).abs() < 1e-6 * k0);
+        // Symmetry.
+        assert!((k[0][6] - k[6][0]).abs() < 1e-30);
+        assert!((k[6][12] - k[12][6]).abs() < 1e-30);
+    }
+
+    #[test]
+    fn test_connected_assembly_differs_from_legacy_heuristic() {
+        // A connected three-node chain must not equal the legacy layout, which
+        // stacks elements into disjoint blocks and loses the shared coupling.
+        let mat = steel_structural();
+        let build = |connected: bool| {
+            let mut sys = FemSystem::new();
+            for i in 0..3 {
+                sys.nodes.push(Coord3D::new(i as Scalar, 0.0, 0.0));
+            }
+            let mk = || {
+                FemElement::Truss(TrussElement {
+                    length: 1.0,
+                    area: 0.01,
+                    material: mat,
+                })
+            };
+            if connected {
+                sys.connect(mk(), &[0, 1]);
+                sys.connect(mk(), &[1, 2]);
+            } else {
+                sys.elements.push(mk());
+                sys.elements.push(mk());
+            }
+            sys.assemble_stiffness()
+        };
+        let connected = build(true);
+        let legacy = build(false);
+        // The shared-node entry differs between the two assembly strategies.
+        assert!(
+            (connected[6][6] - legacy[6][6]).abs() > 1e-6,
+            "connected and legacy assembly should differ at the shared node"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "out of range")]
+    fn test_connect_rejects_bad_node_index() {
+        let mut sys = FemSystem::new();
+        sys.nodes.push(Coord3D::new(0.0, 0.0, 0.0));
+        sys.connect(
+            FemElement::Spring(SpringElement { stiffness: 1.0 }),
+            &[0, 5],
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "needs 2 nodes")]
+    fn test_connect_rejects_wrong_node_count() {
+        let mut sys = FemSystem::new();
+        for i in 0..3 {
+            sys.nodes.push(Coord3D::new(i as Scalar, 0.0, 0.0));
+        }
+        sys.connect(
+            FemElement::Spring(SpringElement { stiffness: 1.0 }),
+            &[0, 1, 2],
+        );
     }
 
     #[test]

@@ -39,6 +39,8 @@ pub struct DataRecorder {
     pub total_written: usize,
     /// Number of flush events that have occurred.
     pub flush_count: usize,
+    /// Samples rejected because the buffer was full in non-streaming mode.
+    pub dropped_samples: usize,
 }
 
 impl DataRecorder {
@@ -51,6 +53,7 @@ impl DataRecorder {
             current_count: 0,
             total_written: 0,
             flush_count: 0,
+            dropped_samples: 0,
         }
     }
 
@@ -62,19 +65,36 @@ impl DataRecorder {
             if let Err(e) = self.append_csv() {
                 log_warn(&format!("Streaming flush failed: {}", e));
             }
-            self.clear();
+            self.flush_buffer();
         }
 
         if !self.config.enable_streaming && self.current_count >= self.config.max_samples {
-            return; // Non-streaming mode: stop accepting data
+            // Non-streaming mode: the buffer is full and data cannot be kept.
+            // Count the loss so callers can tell "recorded 10000" apart from
+            // "recorded 10000 and dropped 40000".
+            self.dropped_samples += 1;
+            return;
         }
 
         self.time_stamps.push(time);
+        // Keep every series exactly as long as `time_stamps` so that columns
+        // cannot silently shift when a signal first appears part-way through
+        // the run. Newly-seen signals are back-filled with NaN ("no data at
+        // this time"), matching `postproc::batch`.
+        for series in self.recorded_data.values_mut() {
+            if series.len() < self.time_stamps.len() - 1 {
+                series.resize(self.time_stamps.len() - 1, Scalar::NAN);
+            }
+        }
         for (name, &val) in signals {
-            self.recorded_data
-                .entry(name.clone())
-                .or_default()
-                .push(val);
+            let series = self.recorded_data.entry(name.clone()).or_default();
+            series.resize(series.len().max(self.time_stamps.len() - 1), Scalar::NAN);
+            series.push(val);
+        }
+        // Signals present earlier but absent now get NaN rather than a
+        // truncated series.
+        for series in self.recorded_data.values_mut() {
+            series.resize(self.time_stamps.len(), Scalar::NAN);
         }
         self.current_count += 1;
     }
@@ -107,13 +127,19 @@ impl DataRecorder {
             writeln!(writer).map_err(|e| format!("Write error: {}", e))?;
         }
 
-        // Write data rows
+        // Write data rows. Columns follow `signal_names()` so the header and
+        // the values are guaranteed to line up.
+        let names = self.signal_names();
         for i in 0..self.time_stamps.len() {
             write!(writer, "{}", self.time_stamps[i]).map_err(|e| format!("Write error: {}", e))?;
-            for data in self.recorded_data.values() {
-                if i < data.len() {
-                    write!(writer, ",{}", data[i]).map_err(|e| format!("Write error: {}", e))?;
-                }
+            for name in &names {
+                let value = self
+                    .recorded_data
+                    .get(*name)
+                    .and_then(|data| data.get(i))
+                    .copied()
+                    .unwrap_or(Scalar::NAN);
+                write!(writer, ",{}", value).map_err(|e| format!("Write error: {}", e))?;
             }
             writeln!(writer).map_err(|e| format!("Write error: {}", e))?;
         }
@@ -138,15 +164,55 @@ impl DataRecorder {
     }
 
     pub fn signal_names(&self) -> Vec<&String> {
-        self.recorded_data.keys().collect()
+        // Sorted so CSV headers and columns are deterministic across runs;
+        // `HashMap` iteration order is not stable.
+        let mut names: Vec<&String> = self.recorded_data.keys().collect();
+        names.sort();
+        names
     }
 
-    pub fn clear(&mut self) {
+    /// Reset the buffer without touching the accounting counters.
+    ///
+    /// This is the internal counterpart of the public [`Self::clear`], used by
+    /// the streaming flush path where the samples have genuinely been written
+    /// out and `total_written`/`flush_count` must be updated.
+    fn flush_buffer(&mut self) {
         self.total_written += self.current_count;
         self.flush_count += 1;
         self.time_stamps.clear();
         self.recorded_data.clear();
         self.current_count = 0;
+    }
+
+    /// Discard all buffered samples and reset the counters.
+    ///
+    /// This is a full reset: unlike the previous implementation it does not
+    /// increment `total_written`/`flush_count`, which made calling `clear()`
+    /// for its documented purpose corrupt the statistics.
+    pub fn clear(&mut self) {
+        self.time_stamps.clear();
+        self.recorded_data.clear();
+        self.current_count = 0;
+        self.total_written = 0;
+        self.flush_count = 0;
+        self.dropped_samples = 0;
+    }
+
+    /// Total number of samples accepted into the buffer (including samples
+    /// already flushed to disk).
+    pub fn total_written(&self) -> usize {
+        self.total_written
+    }
+
+    /// Number of streaming flushes performed.
+    pub fn flush_count(&self) -> usize {
+        self.flush_count
+    }
+
+    /// Number of samples rejected because the non-streaming buffer was full.
+    /// Use this to detect silent data loss in non-streaming mode.
+    pub fn dropped_samples(&self) -> usize {
+        self.dropped_samples
     }
 
     pub fn export_csv(&self, filepath: &str) -> Result<(), String> {
@@ -172,12 +238,19 @@ impl DataRecorder {
             writeln!(writer).map_err(|e| format!("Write error: {}", e))?;
         }
 
+        // Write data rows. Columns follow `signal_names()` so the header and
+        // the values are guaranteed to line up.
+        let names = self.signal_names();
         for i in 0..self.time_stamps.len() {
             write!(writer, "{}", self.time_stamps[i]).map_err(|e| format!("Write error: {}", e))?;
-            for data in self.recorded_data.values() {
-                if i < data.len() {
-                    write!(writer, ",{}", data[i]).map_err(|e| format!("Write error: {}", e))?;
-                }
+            for name in &names {
+                let value = self
+                    .recorded_data
+                    .get(*name)
+                    .and_then(|data| data.get(i))
+                    .copied()
+                    .unwrap_or(Scalar::NAN);
+                write!(writer, ",{}", value).map_err(|e| format!("Write error: {}", e))?;
             }
             writeln!(writer).map_err(|e| format!("Write error: {}", e))?;
         }
@@ -460,6 +533,85 @@ mod tests {
             r.record(i as Scalar, &s);
         }
         assert_eq!(r.current_count, 2);
+        // Samples beyond the non-streaming capacity are dropped, and the loss
+        // must be observable rather than silent.
+        assert_eq!(
+            r.dropped_samples(),
+            3,
+            "the 3 samples that did not fit must be counted as dropped"
+        );
+    }
+
+    /// `clear()` is documented as a reset. It used to increment
+    /// `total_written`/`flush_count`, corrupting the statistics of any caller
+    /// that used it for its stated purpose.
+    #[test]
+    fn test_recorder_clear_resets_counters_instead_of_inflating_them() {
+        let mut r = DataRecorder::new(RecorderConfig::default());
+        let mut s = HashMap::new();
+        s.insert("x".to_string(), 1.0);
+        for i in 0..3 {
+            r.record(i as Scalar, &s);
+        }
+        r.clear();
+        assert_eq!(r.total_written(), 0, "clear() must not report writes");
+        assert_eq!(r.flush_count(), 0, "clear() must not report a flush");
+        assert_eq!(r.dropped_samples(), 0);
+        assert_eq!(r.current_count, 0);
+        assert!(r.time_stamps.is_empty());
+        assert!(r.recorded_data.is_empty());
+    }
+
+    /// Every recorded series must stay the same length as `time_stamps`, so a
+    /// signal that first appears part-way through cannot shift its values into
+    /// the wrong CSV rows.
+    #[test]
+    fn test_recorder_series_stay_aligned_when_signals_appear_late() {
+        let mut r = DataRecorder::new(RecorderConfig::default());
+        // Step 0: only `a` exists.
+        let mut s0 = HashMap::new();
+        s0.insert("a".to_string(), 1.0);
+        r.record(0.0, &s0);
+        // Step 1: only `b` exists.
+        let mut s1 = HashMap::new();
+        s1.insert("b".to_string(), 2.0);
+        r.record(1.0, &s1);
+        // Step 2: both exist.
+        let mut s2 = HashMap::new();
+        s2.insert("a".to_string(), 3.0);
+        s2.insert("b".to_string(), 4.0);
+        r.record(2.0, &s2);
+
+        assert_eq!(r.time_stamps.len(), 3);
+        for (name, series) in &r.recorded_data {
+            assert_eq!(
+                series.len(),
+                3,
+                "series '{name}' must be aligned with the time stamps"
+            );
+        }
+        // `b` was absent at step 0 and must read back as NaN, not silently shift.
+        assert!(r.get_timeseries("b").unwrap()[0].is_nan());
+        assert_eq!(r.get_timeseries("b").unwrap()[1], 2.0);
+        assert_eq!(r.get_timeseries("b").unwrap()[2], 4.0);
+        assert_eq!(r.get_timeseries("a").unwrap()[0], 1.0);
+        assert!(r.get_timeseries("a").unwrap()[1].is_nan());
+    }
+
+    #[test]
+    fn test_recorder_signal_names_are_deterministic() {
+        let mut r = DataRecorder::new(RecorderConfig::default());
+        let mut s = HashMap::new();
+        s.insert("zeta".to_string(), 1.0);
+        s.insert("alpha".to_string(), 2.0);
+        s.insert("mid".to_string(), 3.0);
+        r.record(0.0, &s);
+        let names: Vec<String> = r.signal_names().into_iter().cloned().collect();
+        assert_eq!(
+            names,
+            vec!["alpha", "mid", "zeta"],
+            "columns must be sorted"
+        );
     }
     #[test]
     fn test_recorder_get_timeseries() {

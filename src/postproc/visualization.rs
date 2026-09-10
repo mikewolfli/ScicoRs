@@ -148,6 +148,20 @@ impl ContourGenerator {
         }
     }
 
+    /// Extract iso-contours with the marching-squares algorithm.
+    ///
+    /// Returns `(level, points)` pairs. `points` is a flat list where each
+    /// consecutive pair is the two endpoints of one contour segment — i.e.
+    /// `points[2k]` and `points[2k+1]` form segment `k`. Every endpoint is
+    /// placed on the iso-line by linear interpolation on the cell edge that
+    /// straddles the level, so the geometry can be stroked directly (unlike the
+    /// previous grid-point cloud, whose points were unordered and snapped to
+    /// grid nodes).
+    ///
+    /// The grid is indexed as `z_values[i][j]` at `(x_grid[i], y_grid[j])`,
+    /// matching [`Self::color_map`]. Cells are only emitted where both grid
+    /// axes have a neighbouring sample, so the returned endpoints are always
+    /// inside the sampled domain.
     pub fn contours(&self, num_levels: usize) -> Vec<(Scalar, Vec<[Scalar; 2]>)> {
         let mut levels = Vec::new();
         if self.z_values.is_empty() {
@@ -161,23 +175,110 @@ impl ContourGenerator {
                 z_max = z_max.max(z);
             }
         }
-        let step = (z_max - z_min) / (num_levels.max(2) - 1) as Scalar;
-        for l in 0..num_levels {
+        if !z_min.is_finite() || !z_max.is_finite() || z_max <= z_min {
+            return levels;
+        }
+        let n_levels = num_levels.max(1);
+        let step = (z_max - z_min) / n_levels as Scalar;
+        for l in 0..=n_levels {
             let level_val = z_min + l as Scalar * step;
-            // Simplified contour: just return grid points near this level
-            let mut pts = Vec::new();
-            for (i, row) in self.z_values.iter().enumerate() {
-                for (j, &z) in row.iter().enumerate() {
-                    if (z - level_val).abs() < step * 0.5 {
-                        if i < self.x_grid.len() && j < self.y_grid.len() {
-                            pts.push([self.x_grid[i], self.y_grid[j]]);
-                        }
-                    }
-                }
-            }
-            levels.push((level_val, pts));
+            levels.push((level_val, self.marching_squares(level_val)));
         }
         levels
+    }
+
+    /// Marching squares for a single iso-level.
+    ///
+    /// Each `i, j` cell is the quad formed by samples `(i, j)`, `(i+1, j)`,
+    /// `(i, j+1)`, `(i+1, j+1)`. Corners are classified above/below the level
+    /// and the crossing points on the cell edges are linearly interpolated,
+    /// which is what places the contour between grid nodes.
+    fn marching_squares(&self, level: Scalar) -> Vec<[Scalar; 2]> {
+        let rows = self.z_values.len();
+        let mut points: Vec<[Scalar; 2]> = Vec::new();
+        if rows < 2 {
+            return points;
+        }
+        // Interpolate a crossing point between two corner values.
+        let lerp = |v0: Scalar, v1: Scalar, a: [Scalar; 2], b: [Scalar; 2]| -> [Scalar; 2] {
+            let denom = v1 - v0;
+            let t = if denom.abs() < 1e-30 {
+                0.5
+            } else {
+                (level - v0) / denom
+            };
+            let t = t.clamp(0.0, 1.0);
+            [a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])]
+        };
+
+        for i in 0..rows - 1 {
+            if i + 1 >= self.x_grid.len() || i >= self.x_grid.len() {
+                continue;
+            }
+            let cols = self.z_values[i].len().min(self.z_values[i + 1].len());
+            if cols < 2 {
+                continue;
+            }
+            for j in 0..cols - 1 {
+                if j + 1 >= self.y_grid.len() || j >= self.y_grid.len() {
+                    continue;
+                }
+                let p00 = [self.x_grid[i], self.y_grid[j]];
+                let p10 = [self.x_grid[i + 1], self.y_grid[j]];
+                let p01 = [self.x_grid[i], self.y_grid[j + 1]];
+                let p11 = [self.x_grid[i + 1], self.y_grid[j + 1]];
+                let v00 = self.z_values[i][j];
+                let v10 = self.z_values[i + 1][j];
+                let v01 = self.z_values[i][j + 1];
+                let v11 = self.z_values[i + 1][j + 1];
+                if !(v00.is_finite() && v10.is_finite() && v01.is_finite() && v11.is_finite()) {
+                    continue;
+                }
+                let mut case = 0u8;
+                if v00 > level {
+                    case |= 1;
+                }
+                if v10 > level {
+                    case |= 2;
+                }
+                if v11 > level {
+                    case |= 4;
+                }
+                if v01 > level {
+                    case |= 8;
+                }
+                if case == 0 || case == 15 {
+                    continue;
+                }
+                // Edge crossing points, named by the corners they separate.
+                let bottom = || lerp(v00, v10, p00, p10);
+                let right = || lerp(v10, v11, p10, p11);
+                let top = || lerp(v01, v11, p01, p11);
+                let left = || lerp(v00, v01, p00, p01);
+
+                // Standard marching-squares case table, emitting one or two
+                // ordered segments per cell as consecutive endpoint pairs.
+                match case {
+                    1 | 14 => points.extend_from_slice(&[left(), bottom()]),
+                    2 | 13 => points.extend_from_slice(&[bottom(), right()]),
+                    3 | 12 => points.extend_from_slice(&[left(), right()]),
+                    4 | 11 => points.extend_from_slice(&[right(), top()]),
+                    6 | 9 => points.extend_from_slice(&[bottom(), top()]),
+                    7 | 8 => points.extend_from_slice(&[left(), top()]),
+                    // Saddle cases: resolve into two disjoint segments.
+                    5 => {
+                        points.extend_from_slice(&[left(), bottom()]);
+                        points.extend_from_slice(&[right(), top()]);
+                    }
+                    10 => {
+                        points.extend_from_slice(&[left(), top()]);
+                        points.extend_from_slice(&[bottom(), right()]);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        points
     }
 
     pub fn color_map(&self) -> Vec<Vec<(Scalar, Scalar, Scalar)>> {
@@ -517,7 +618,82 @@ mod tests {
             vec![vec![0.0, 1.0], vec![1.0, 0.0]],
         );
         let levels = cg.contours(5);
-        assert_eq!(levels.len(), 5);
+        // `num_levels` intervals produce `num_levels + 1` iso-levels.
+        assert_eq!(levels.len(), 6);
+        // Level values must span the data range monotonically.
+        assert!((levels[0].0 - 0.0).abs() < 1e-12);
+        assert!((levels[5].0 - 1.0).abs() < 1e-12);
+        for w in levels.windows(2) {
+            assert!(w[1].0 > w[0].0, "levels not increasing");
+        }
+    }
+
+    #[test]
+    fn test_contour_segments_are_interpolated_not_grid_nodes() {
+        // A planar field z = 3·x + 5·y on a unit grid. The iso-line for a level
+        // that does not divide evenly crosses cell edges at strictly
+        // interpolated points, so the endpoints land between grid nodes — which
+        // is what distinguishes a real contour from a point cloud.
+        let n = 5;
+        let coords: Vec<Scalar> = (0..n).map(|i| i as Scalar).collect();
+        let z: Vec<Vec<Scalar>> = coords
+            .iter()
+            .map(|&xi| coords.iter().map(|&yj| 3.0 * xi + 5.0 * yj).collect())
+            .collect();
+        let cg = ContourGenerator::new(coords.clone(), coords, z);
+        let levels = cg.contours(6);
+        // Target an interior level lying between samples of the linear field.
+        let target = 10.0;
+        let (level, segs) = levels
+            .iter()
+            .min_by(|a, b| {
+                (a.0 - target)
+                    .abs()
+                    .partial_cmp(&(b.0 - target).abs())
+                    .unwrap()
+            })
+            .expect("at least one level");
+        let level = *level;
+        assert!(!segs.is_empty(), "interior level should yield segments");
+        assert_eq!(segs.len() % 2, 0, "endpoints must come in pairs");
+
+        // Every endpoint must lie on the iso-line 3x + 5y = level.
+        let mut interpolated = 0usize;
+        for p in segs {
+            assert!(
+                (3.0 * p[0] + 5.0 * p[1] - level).abs() < 1e-9,
+                "endpoint {:?} is off the iso-line (level {level})",
+                p
+            );
+            // A node-free crossing has at least one non-integral coordinate.
+            let fx = (p[0] - p[0].round()).abs();
+            let fy = (p[1] - p[1].round()).abs();
+            if fx > 1e-9 || fy > 1e-9 {
+                interpolated += 1;
+            }
+        }
+        assert!(
+            interpolated > 0,
+            "marching squares must interpolate points between grid nodes"
+        );
+    }
+
+    #[test]
+    fn test_contour_uniform_field_has_no_segments() {
+        // A constant field never crosses an interior level, so no segments
+        // should be produced (only the boundary levels are degenerate).
+        let cg = ContourGenerator::new(
+            vec![0.0, 1.0, 2.0],
+            vec![0.0, 1.0, 2.0],
+            vec![vec![7.0; 3]; 3],
+        );
+        for (_, segs) in cg.contours(3) {
+            assert!(
+                segs.is_empty(),
+                "constant field produced {} segments",
+                segs.len()
+            );
+        }
     }
     #[test]
     fn test_color_map() {

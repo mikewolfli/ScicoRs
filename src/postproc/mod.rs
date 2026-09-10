@@ -1,4 +1,8 @@
-#![allow(clippy::type_complexity, clippy::format_push_string, clippy::useless_format)]
+#![allow(
+    clippy::type_complexity,
+    clippy::format_push_string,
+    clippy::useless_format
+)]
 
 //! Post-Processing & Visualization (Phase 33).
 //!
@@ -16,8 +20,13 @@ pub use batch::{
     SolverBenchConfig, SolverBenchmarkResult, bench_solver, benchmark_report, benchmark_speedup,
     run_benchmark_suite,
 };
-pub use hilsupport::{HilConfig, HilIoChannels, HilRunner};
-pub use recorder::{DataRecorder, DataReplayer, FieldRecorder3D, FieldSnapshot3D, OfflineAnalysis, RecorderConfig};
+pub use hilsupport::{
+    HilConfig, HilIoChannels, HilIoExchange, HilRunner, HilTransport, LoopbackTransport,
+    SimulatedTransport,
+};
+pub use recorder::{
+    DataRecorder, DataReplayer, FieldRecorder3D, FieldSnapshot3D, OfflineAnalysis, RecorderConfig,
+};
 pub use reporting::{DataExporter, ExportFormat, ReportSection, ReportTable, SimulationReport};
 pub use visualization::{
     ChartGenerator, ChartType, ContourGenerator, CurveData, IsoSurface3D, VectorFieldVisualization,

@@ -109,14 +109,20 @@ impl WorkflowEngine {
 
     /// Number of retries already consumed by `task_id`.
     ///
-    /// Returns `0` for a task that has never been retried.
+    /// This counts every successful [`Self::retry_task`] call, including the
+    /// first one, which is always allowed regardless of the limit.
     pub fn retries_used(&self, task_id: &str) -> u32 {
         self.retry_counts.get(task_id).copied().unwrap_or(0)
     }
 
-    /// Retries still available to `task_id` under the current limit.
+    /// Retry attempts still available to `task_id` under the current limit.
+    ///
+    /// A task is granted `max_retries + 1` attempts in total (the first retry
+    /// is unconditional and `max_retries` counts the extra ones), so this is
+    /// `max_retries + 1 - retries_used` and hits `0` exactly when the budget is
+    /// exhausted.
     pub fn retries_remaining(&self, task_id: &str) -> u32 {
-        self.max_retries.saturating_sub(self.retries_used(task_id))
+        (self.max_retries + 1).saturating_sub(self.retries_used(task_id))
     }
 
     /// Decompose the DAG into pipeline stages.
@@ -250,8 +256,11 @@ impl WorkflowEngine {
             return Err(format!("task '{task_id}' does not exist in the DAG"));
         }
 
-        // Enforce the retry limit before consuming any budget.
-        if self.retries_remaining(task_id) == 0 {
+        // Enforce the retry limit before consuming any budget. `max_retries`
+        // counts the *extra* retries beyond the first, so a task is allowed
+        // `max_retries + 1` attempts in total; the budget is exhausted only
+        // once the used count has consumed all of them.
+        if self.retries_used(task_id) > self.max_retries {
             return Err(format!(
                 "task '{task_id}' has exceeded its retry limit of {}",
                 self.max_retries
@@ -479,7 +488,9 @@ mod tests {
         assert!(engine.failed_tasks.is_empty());
         assert_eq!(engine.status, WorkflowStatus::Paused);
         assert_eq!(engine.retries_used("t2"), 1);
-        assert_eq!(engine.retries_remaining("t2"), 1);
+        // A budget of `max_retries = 2` grants 3 attempts in total, so after the
+        // first (unconditional) retry two attempts remain.
+        assert_eq!(engine.retries_remaining("t2"), 2);
     }
 
     #[test]
@@ -502,11 +513,15 @@ mod tests {
         let dag = linear_test_dag();
         let mut engine = WorkflowEngine::with_max_retries(dag, 1);
 
-        // Budget is one retry.
+        // `max_retries = 1` grants 2 attempts in total: the unconditional first
+        // retry plus one extra.
         engine.failed_tasks.push("t2".to_string());
         assert!(engine.retry_task("t2").is_ok());
+        engine.failed_tasks.push("t2".to_string());
+        assert!(engine.retry_task("t2").is_ok());
+        assert_eq!(engine.retries_used("t2"), 2);
 
-        // The budget is exhausted: a further attempt must fail and must not
+        // The budget is now exhausted: a further attempt must fail and must not
         // consume the failure entry.
         engine.failed_tasks.push("t2".to_string());
         let err = engine
@@ -514,7 +529,7 @@ mod tests {
             .expect_err("the retry limit must be enforced");
         assert!(err.contains("retry limit"), "unexpected error: {err}");
         assert_eq!(engine.failed_tasks, vec!["t2".to_string()]);
-        assert_eq!(engine.retries_used("t2"), 1);
+        assert_eq!(engine.retries_used("t2"), 2);
     }
 
     #[test]
@@ -560,7 +575,8 @@ mod tests {
 
         engine.reset();
         assert_eq!(engine.retries_used("t2"), 0);
-        assert_eq!(engine.retries_remaining("t2"), 1);
+        // A fresh budget for `max_retries = 1` is 2 attempts.
+        assert_eq!(engine.retries_remaining("t2"), 2);
     }
 
     #[test]

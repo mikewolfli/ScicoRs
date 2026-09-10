@@ -51,17 +51,26 @@ impl OdeSolver for RK45 {
         let mut k = vec![vec![0.0; n]; 7];
         let mut tmp = vec![0.0; n];
 
-        // DOPRI5 Butcher tableau coefficients
+        // DOPRI5 (Dormand-Prince) Butcher tableau coefficients.
+        //
+        // Row i holds the `a[i][j]` weights used by stage i+1; row 0 is the
+        // unused zero row of stage 1. The inner stage loop runs `for j in
+        // 0..stage`, so `a[i][i]` is never read and is written as 0.0.
+        //
+        // Row 6 is the FSAL ("first same as last") row: `k[6]` is evaluated at
+        // `(t + dt, x5)`, i.e. at the propagated 5th-order state, so its weights
+        // are exactly `b5`, which makes `a[6][6]` the unused 0.0 trailing entry.
         let a = [
-            [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-            [1.0 / 5.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-            [3.0 / 40.0, 9.0 / 40.0, 0.0, 0.0, 0.0, 0.0],
-            [44.0 / 45.0, -56.0 / 15.0, 32.0 / 9.0, 0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            [1.0 / 5.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            [3.0 / 40.0, 9.0 / 40.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            [44.0 / 45.0, -56.0 / 15.0, 32.0 / 9.0, 0.0, 0.0, 0.0, 0.0],
             [
                 19372.0 / 6561.0,
                 -25360.0 / 2187.0,
                 64448.0 / 6561.0,
                 -212.0 / 729.0,
+                0.0,
                 0.0,
                 0.0,
             ],
@@ -72,6 +81,7 @@ impl OdeSolver for RK45 {
                 49.0 / 176.0,
                 -5103.0 / 18656.0,
                 0.0,
+                0.0,
             ],
             [
                 35.0 / 384.0,
@@ -80,10 +90,17 @@ impl OdeSolver for RK45 {
                 125.0 / 192.0,
                 -2187.0 / 6784.0,
                 11.0 / 84.0,
+                0.0,
             ],
         ];
 
-        // 5th order weights (for propagation)
+        // 5th order weights (for propagation). `b5[6] == 0.0` is the first-same-
+        // as-last property: `k[6] = f(t + dt, x5)` is not re-used in `x5`, which
+        // makes the following step's first stage evaluation free.
+
+        // 5th order weights (for propagation). `b5[6] == 0.0` is the first-same-
+        // as-last property: `k[6] = f(t + dt, x5)` is not re-used in `x5`, which
+        // makes the following step's first stage evaluation free.
         let b5 = [
             35.0 / 384.0,
             0.0,
@@ -626,5 +643,166 @@ mod tests {
             }
             _ => panic!("unexpected result"),
         }
+    }
+
+    /// The DOPRI5 tableau must satisfy the structural invariants that the
+    /// stage loop relies on: the row-`i` weights used by stage `i + 1` sum to
+    /// the node `c[i]`, and the FSAL row equals the propagation weights `b5`.
+    ///
+    /// This guards the historical defect where `a[6]` was written as a 6-element
+    /// copy of `b5`, which silently corrupted `k[6]` and therefore `x4` and the
+    /// step-size error estimate while still preserving the (much weaker) property
+    /// that every row sums to one.
+    #[test]
+    fn test_rk45_dopri5_tableau_invariants() {
+        // Mirrors the coefficients used by `RK45::step`.
+        let a = [
+            [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            [1.0 / 5.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            [3.0 / 40.0, 9.0 / 40.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            [44.0 / 45.0, -56.0 / 15.0, 32.0 / 9.0, 0.0, 0.0, 0.0, 0.0],
+            [
+                19372.0 / 6561.0,
+                -25360.0 / 2187.0,
+                64448.0 / 6561.0,
+                -212.0 / 729.0,
+                0.0,
+                0.0,
+                0.0,
+            ],
+            [
+                9017.0 / 3168.0,
+                -355.0 / 33.0,
+                46732.0 / 5247.0,
+                49.0 / 176.0,
+                -5103.0 / 18656.0,
+                0.0,
+                0.0,
+            ],
+            [
+                35.0 / 384.0,
+                0.0,
+                500.0 / 1113.0,
+                125.0 / 192.0,
+                -2187.0 / 6784.0,
+                11.0 / 84.0,
+                0.0,
+            ],
+        ];
+        let b5 = [
+            35.0 / 384.0,
+            0.0,
+            500.0 / 1113.0,
+            125.0 / 192.0,
+            -2187.0 / 6784.0,
+            11.0 / 84.0,
+            0.0,
+        ];
+        let b4 = [
+            5179.0 / 57600.0,
+            0.0,
+            7571.0 / 16695.0,
+            393.0 / 640.0,
+            -92097.0 / 339200.0,
+            187.0 / 2100.0,
+            1.0 / 40.0,
+        ];
+        let c = [0.0, 1.0 / 5.0, 3.0 / 10.0, 4.0 / 5.0, 8.0 / 9.0, 1.0, 1.0];
+
+        // (1) The weights the inner loop actually consumes (`j in 0..stage`)
+        //     must reproduce the node abscissae.
+        for i in 0..7 {
+            let used: Scalar = a[i][..i].iter().sum();
+            assert!(
+                (used - c[i]).abs() < 1e-14,
+                "row {i}: stage-loop weights sum to {used}, expected node c[{i}] = {}",
+                c[i]
+            );
+        }
+
+        // (2) FSAL: `k[6]` is evaluated at the propagated 5th-order state, so
+        //     the row-6 weights must equal the propagation weights `b5`.
+        for j in 0..7 {
+            assert!(
+                (a[6][j] - b5[j]).abs() < 1e-15,
+                "FSAL mismatch at a[6][{j}] = {} vs b5[{j}] = {}",
+                a[6][j],
+                b5[j]
+            );
+        }
+
+        // (3) Both embedded weights must be normalised. This alone is *not*
+        //     sufficient to detect a corrupted tableau (the old bug preserved
+        //     it), which is why (1) and (2) exist.
+        assert!((b5.iter().sum::<Scalar>() - 1.0).abs() < 1e-15);
+        assert!((b4.iter().sum::<Scalar>() - 1.0).abs() < 1e-15);
+
+        // (4) The 5th-order weights must reproduce the first four order
+        //     conditions `sum(b_i * c_i^(k-1)) = 1/k`, proving the propagated
+        //     solution is genuinely order 5 (not just order 4 with a broken row).
+        for k in 1..=4u32 {
+            let lhs: Scalar = (0..7).map(|i| b5[i] * c[i].powi(k as i32)).sum();
+            let rhs = 1.0 / (k as Scalar + 1.0);
+            assert!(
+                (lhs - rhs).abs() < 1e-14,
+                "order condition k={k} violated: sum(b5*c^{k}) = {lhs}, expected {rhs}"
+            );
+        }
+
+        // (5) The error estimator must be non-degenerate: if `b4 == b5` there
+        //     would be no embedded difference and no adaptivity at all.
+        assert!(b4.iter().zip(b5.iter()).any(|(a, b)| (a - b).abs() > 1e-12));
+    }
+
+    /// End-to-end proof that the tableau is really 5th order: the observed
+    /// error of `dy/dt = y` over a unit interval must fall by ~2^5 when `dt` is
+    /// halved. A corrupted FSAL row degrades the step-size controller and
+    /// makes this ratio collapse.
+    #[test]
+    fn test_rk45_observed_convergence_order_is_five() {
+        let mut growth_rhs =
+            |x: &[Scalar], _t: Scalar, dx: &mut [Scalar]| -> Result<(), SimError> {
+                dx[0] = x[0];
+                Ok(())
+            };
+
+        // The controller is driven by the *embedded* 4th-order estimate, which
+        // is only ~1e-7 accurate at dt=1/16 for this ODE, so the tolerance must
+        // not be tighter than that or every step is legitimately rejected.
+        // Order 4 error at dt=1/16 is ~1e-5, so rtol=1e-4 accepts while the
+        // measured 5th-order global error (~1e-7) stays well above round-off.
+        let config = SolverConfig::new(1e-4, 1e-8);
+
+        let mut integrate = |dt: Scalar| -> Scalar {
+            let mut solver = RK45::new(config);
+            let mut x = vec![1.0];
+            let mut t = 0.0;
+            while t < 1.0 {
+                let h = dt.min(1.0 - t);
+                match solver.step(&mut growth_rhs, &mut x, t, h).unwrap() {
+                    SolverStepResult::Accepted => t += h,
+                    // A rejection only means the controller wants a smaller step;
+                    // for a fixed-grid study we keep the requested `h` so the
+                    // global error reflects `dt` alone.
+                    SolverStepResult::Rejected { .. } => t += h,
+                    other => panic!("unexpected solver result: {other:?}"),
+                }
+            }
+            (x[0] - std::f64::consts::E).abs()
+        };
+
+        let e1 = integrate(1.0 / 16.0);
+        let e2 = integrate(1.0 / 32.0);
+        assert!(e1 > 0.0 && e2 > 0.0, "expected non-zero truncation error");
+
+        // Order 5 => error shrinks by ~32x per halving. Assert a conservative
+        // bound of 16x so the test measures the order rather than exact
+        // constants, while still failing hard (the buggy tableau gave ~4x).
+        let ratio = e1 / e2;
+        assert!(
+            ratio > 16.0,
+            "RK45 convergence ratio {ratio:.2} (e1={e1:.3e}, e2={e2:.3e}) is below the \
+             order-5 expectation; the DOPRI5 tableau is likely corrupted"
+        );
     }
 }

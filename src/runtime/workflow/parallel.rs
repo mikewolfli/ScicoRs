@@ -634,11 +634,22 @@ mod tests {
             expected_count: 2,
             timeout: None,
         });
-        let handle = sched.barrier_handle("s1").expect("handle");
-        handle.wait().expect("arrive");
-        assert_eq!(sched.barrier_arrived_count("s1"), Some(1));
 
-        // Replacing the barrier must discard the stale arrival count.
+        // Trip the barrier with exactly its quorum (2 arrivals). Calling
+        // `wait()` once here would block forever on a 2-participant barrier,
+        // so the arrival counter is driven through the public handle by two
+        // participants, exactly as `execute_parallel_scoped` would.
+        let handle = sched.barrier_handle("s1").expect("handle");
+        let h1 = handle.clone();
+        let waiter = std::thread::spawn(move || h1.wait());
+        let first = handle.wait().expect("second arrival trips the barrier");
+        let second = waiter.join().expect("worker joins").expect("arrive");
+        assert_eq!(first, second, "both participants observe one generation");
+        // A tripped barrier resets its arrival count for the next generation.
+        assert_eq!(sched.barrier_arrived_count("s1"), Some(0));
+
+        // Replacing the barrier must discard the (now empty) runtime state and
+        // install the new configuration.
         sched.add_barrier(BarrierSync {
             stage_id: "s1".into(),
             expected_count: 4,
@@ -647,6 +658,23 @@ mod tests {
         assert_eq!(sched.barrier_count(), 1);
         assert_eq!(sched.barrier("s1").expect("barrier").expected_count, 4);
         assert_eq!(sched.barrier_arrived_count("s1"), Some(0));
+    }
+
+    #[test]
+    fn test_barrier_without_quorum_times_out_instead_of_hanging() {
+        // A barrier that never reaches quorum must fail fast via its timeout
+        // rather than blocking the test suite forever.
+        let mut sched = ParallelScheduler::new(4);
+        sched.add_barrier(BarrierSync {
+            stage_id: "lonely".into(),
+            expected_count: 2,
+            timeout: Some(Duration::from_millis(20)),
+        });
+        let handle = sched.barrier_handle("lonely").expect("handle");
+        let err = handle.wait().expect_err("a lone arrival must time out");
+        assert!(err.contains("timed out"), "unexpected error: {err}");
+        // The timed-out participant is rolled back, leaving no stale arrival.
+        assert_eq!(sched.barrier_arrived_count("lonely"), Some(0));
     }
 
     #[test]

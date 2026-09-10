@@ -72,7 +72,7 @@ impl BinaryOp {
     ///
     /// Shared across the element-wise and reduction kernels:
     /// `0 = add/dot`, `1 = sub/sum`, `2 = mul/asum`, `3 = abs/max-abs`.
-    fn tag(self) -> u32 {
+    pub(crate) fn tag(self) -> u32 {
         match self {
             BinaryOp::Add | BinaryOp::Dot => 0,
             BinaryOp::Sub | BinaryOp::Sum => 1,
@@ -121,6 +121,18 @@ pub struct GpuKernels {
     reduce_partial: Kernel,
     reduce_finalize: Kernel,
     transpose: Kernel,
+}
+
+/// The buffers one batched kernel launch binds.
+///
+/// Grouping them keeps the recording helpers to a small arity and makes the
+/// binding order explicit at each call site.
+#[derive(Clone, Copy)]
+pub(super) struct BatchBuffers<'b> {
+    pub first: &'b wgpu::Buffer,
+    pub second: &'b wgpu::Buffer,
+    pub out: &'b wgpu::Buffer,
+    pub ctrl: &'b wgpu::Buffer,
 }
 
 impl GpuKernels {
@@ -217,6 +229,255 @@ impl GpuKernels {
     /// The storage precision these kernels were compiled for.
     pub fn precision(&self) -> GpuPrecision {
         self.precision
+    }
+
+    /// Number of compiled compute pipelines held by this kernel set.
+    ///
+    /// Derived from the pipeline set itself rather than hardcoded, so it stays
+    /// correct when kernels are added.
+    pub fn kernel_count(&self) -> usize {
+        // matmul, binary, scale, axpy, reduce_partial, reduce_finalize,
+        // transpose — count the live fields explicitly.
+        [
+            &self.matmul,
+            &self.binary,
+            &self.scale,
+            &self.axpy,
+            &self.reduce_partial,
+            &self.reduce_finalize,
+            &self.transpose,
+        ]
+        .len()
+    }
+
+    /// Start a batched submission that shares one command buffer and one poll.
+    ///
+    /// See [`super::batch`] for why this matters: on an integrated adapter the
+    /// fixed per-submission round-trip dominates small kernels, so collapsing
+    /// several independent operations into one submit is the only way to make
+    /// GPU dispatch pay off for them.
+    pub fn batch<'k>(&'k self, ctx: &'k GpuContext) -> super::batch::BatchEncoder<'k> {
+        super::batch::BatchEncoder::new(self, ctx)
+    }
+
+    /// Encode a scalar for the active kernel set (batch-path wrapper).
+    pub(super) fn encode_scalar_for_batch(&self, value: Scalar) -> (u32, u32) {
+        self.encode_scalar(value)
+    }
+
+    /// Acquire a pooled buffer for the batch path.
+    pub(super) fn acquire_for_batch(&self, role: BufferRoleSpec, bytes: u64) -> PooledBuffer {
+        self.pool.acquire(role, bytes)
+    }
+
+    /// Upload host data into a pooled input buffer (batch path).
+    pub(super) fn upload_for_batch(
+        &self,
+        ctx: &GpuContext,
+        data: &[Scalar],
+    ) -> Result<PooledBuffer, SimError> {
+        self.upload(ctx, data)
+    }
+
+    /// Allocate a control buffer holding the four `u32` slots (batch path).
+    pub(super) fn control_for_batch(
+        &self,
+        ctx: &GpuContext,
+        params: &[u32; 4],
+    ) -> Result<PooledBuffer, SimError> {
+        self.control_buffer(ctx, params)
+    }
+
+    /// Download `len` elements from `buffer` after a batch submission.
+    pub(super) fn download_for_batch(
+        &self,
+        ctx: &GpuContext,
+        buffer: &PooledBuffer,
+        len: usize,
+        precision: GpuPrecision,
+    ) -> Result<Vec<Scalar>, SimError> {
+        // Map the full allocation the buffer was sized for, but decode `len`.
+        download(ctx, buffer.buffer(), len, precision)
+    }
+
+    /// Number of reduction partials for `len`, validated against the adapter.
+    pub(super) fn partial_count_for_batch(
+        &self,
+        len: usize,
+        _max_elements: usize,
+    ) -> Result<usize, SimError> {
+        partial_count(len)
+    }
+
+    /// Record the tiled GEMM into an existing encoder.
+    pub(super) fn record_matmul_for_batch(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        ctx: &GpuContext,
+        bufs: BatchBuffers<'_>,
+        shape: (usize, usize),
+    ) {
+        let device = ctx.device();
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("scico batch matmul"),
+            layout: &self.matmul.bind_group_layout,
+            entries: &[
+                bind_entry(0, bufs.first),
+                bind_entry(1, bufs.second),
+                bind_entry(2, bufs.out),
+                bind_entry(3, bufs.ctrl),
+            ],
+        });
+        record_compute(
+            encoder,
+            &self.matmul.pipeline,
+            &bind_group,
+            dispatch_matmul(shape.0, shape.1),
+        );
+    }
+
+    /// Record an element-wise binary op into an existing encoder.
+    pub(super) fn record_binary_for_batch(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        ctx: &GpuContext,
+        bufs: BatchBuffers<'_>,
+        len: usize,
+    ) {
+        let device = ctx.device();
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("scico batch binary"),
+            layout: &self.binary.bind_group_layout,
+            entries: &[
+                bind_entry(0, bufs.first),
+                bind_entry(1, bufs.second),
+                bind_entry(2, bufs.out),
+                bind_entry(3, bufs.ctrl),
+            ],
+        });
+        record_compute(
+            encoder,
+            &self.binary.pipeline,
+            &bind_group,
+            dispatch_elements(len),
+        );
+    }
+
+    /// Record the scalar-vector kernel (three bindings) into an encoder.
+    pub(super) fn record_scale_for_batch(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        ctx: &GpuContext,
+        a: &wgpu::Buffer,
+        out: &wgpu::Buffer,
+        ctrl: &wgpu::Buffer,
+        len: usize,
+    ) {
+        let device = ctx.device();
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("scico batch scale"),
+            layout: &self.scale.bind_group_layout,
+            entries: &[bind_entry(0, a), bind_entry(1, out), bind_entry(2, ctrl)],
+        });
+        record_compute(
+            encoder,
+            &self.scale.pipeline,
+            &bind_group,
+            dispatch_elements(len),
+        );
+    }
+
+    /// Record the AXPY kernel into an encoder.
+    pub(super) fn record_axpy_for_batch(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        ctx: &GpuContext,
+        bufs: BatchBuffers<'_>,
+        len: usize,
+    ) {
+        let device = ctx.device();
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("scico batch axpy"),
+            layout: &self.axpy.bind_group_layout,
+            entries: &[
+                bind_entry(0, bufs.first),
+                bind_entry(1, bufs.second),
+                bind_entry(2, bufs.out),
+                bind_entry(3, bufs.ctrl),
+            ],
+        });
+        record_compute(
+            encoder,
+            &self.axpy.pipeline,
+            &bind_group,
+            dispatch_elements(len),
+        );
+    }
+
+    /// Record the two-stage reduction into an encoder.
+    ///
+    /// Returns the control buffers it allocated so the caller can keep them
+    /// alive until the batch is submitted (the encoder references them).
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn record_reduce_for_batch(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        ctx: &GpuContext,
+        op: BinaryOp,
+        a: &wgpu::Buffer,
+        b: &wgpu::Buffer,
+        out: &wgpu::Buffer,
+        len: usize,
+        partials: usize,
+    ) -> Result<Vec<PooledBuffer>, SimError> {
+        let device = ctx.device();
+        let mut ctrls = Vec::with_capacity(2);
+        let params = [
+            u32_from(len, "reduce len")?,
+            op.tag(),
+            u32_from(partials, "reduce partials")?,
+            0,
+        ];
+        let ctrl = self.control_buffer(ctx, &params)?;
+        let bg1 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("scico batch reduce partial"),
+            layout: &self.reduce_partial.bind_group_layout,
+            entries: &[
+                bind_entry(0, a),
+                bind_entry(1, b),
+                bind_entry(2, out),
+                bind_entry(3, ctrl.buffer()),
+            ],
+        });
+        record_compute(
+            encoder,
+            &self.reduce_partial.pipeline,
+            &bg1,
+            (partials as u32, 1, 1),
+        );
+        ctrls.push(ctrl);
+        if partials > 1 {
+            let params2 = [
+                u32_from(len, "reduce finalize len")?,
+                op.tag(),
+                u32_from(partials, "reduce finalize")?,
+                0,
+            ];
+            let ctrl2 = self.control_buffer(ctx, &params2)?;
+            let bg2 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("scico batch reduce finalize"),
+                layout: &self.reduce_finalize.bind_group_layout,
+                entries: &[
+                    bind_entry(0, a),
+                    bind_entry(1, b),
+                    bind_entry(2, out),
+                    bind_entry(3, ctrl2.buffer()),
+                ],
+            });
+            record_compute(encoder, &self.reduce_finalize.pipeline, &bg2, (1, 1, 1));
+            ctrls.push(ctrl2);
+        }
+        Ok(ctrls)
     }
 
     /// `C(m×n) = A(m×k) · B(k×n)` on the device. All buffers are row-major.
