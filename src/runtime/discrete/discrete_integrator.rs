@@ -52,7 +52,10 @@ impl DiscreteIntegrator {
     /// # Panics
     /// Panics if `dt` is not positive.
     pub fn new(method: IntegrationMethod, dt: Scalar, initial: Scalar) -> Self {
-        assert!(dt > 0.0, "DiscreteIntegrator: dt must be positive, got {dt}");
+        assert!(
+            dt > 0.0,
+            "DiscreteIntegrator: dt must be positive, got {dt}"
+        );
         Self {
             method,
             state: initial,
@@ -80,9 +83,7 @@ impl DiscreteIntegrator {
 
         let dt = self.dt;
         let next = match self.method {
-            IntegrationMethod::ForwardEuler => {
-                self.state + dt * input
-            }
+            IntegrationMethod::ForwardEuler => self.state + dt * input,
             IntegrationMethod::BackwardEuler => {
                 let u_next = input_next.unwrap_or(input);
                 self.state + dt * u_next
@@ -128,10 +129,14 @@ impl DiscreteIntegrator {
     /// Clamp a value to the configured limits.
     fn clamp(&self, value: Scalar) -> Scalar {
         let mut v = value;
-        if let Some(min) = self.limit_min && v < min {
+        if let Some(min) = self.limit_min
+            && v < min
+        {
             v = min;
         }
-        if let Some(max) = self.limit_max && v > max {
+        if let Some(max) = self.limit_max
+            && v > max
+        {
             v = max;
         }
         v
@@ -143,10 +148,7 @@ mod tests {
     use super::*;
 
     fn approx_eq(a: Scalar, b: Scalar) {
-        assert!(
-            (a - b).abs() < 1e-10,
-            "expected {b}, got {a}"
-        );
+        assert!((a - b).abs() < 1e-10, "expected {b}, got {a}");
     }
 
     #[test]
@@ -232,7 +234,8 @@ mod tests {
 
     #[test]
     fn output_method() {
-        let int = DiscreteIntegrator::new(IntegrationMethod::Trapezoidal, 0.01, std::f64::consts::PI);
+        let int =
+            DiscreteIntegrator::new(IntegrationMethod::Trapezoidal, 0.01, std::f64::consts::PI);
         approx_eq(int.output(), std::f64::consts::PI);
     }
 

@@ -5,20 +5,22 @@
 //! the solver discretizes the differential part with backward Euler and
 //! solves the coupled system via Newton iteration.
 
-use crate::core::error::SimError;
-use crate::core::types::Scalar;
 use super::nonlinear::NewtonRaphson;
 use super::traits::{SolverConfig, SolverStepResult};
+use crate::core::error::SimError;
+use crate::core::types::Scalar;
 
 /// A function that evaluates the differential part of a DAE.
 ///
 /// `f(t, x, z, dx)` — computes dx/dt = f(t, x, z)
-pub type DaeDiffFn<'a> = dyn FnMut(Scalar, &[Scalar], &[Scalar], &mut [Scalar]) -> Result<(), SimError> + 'a;
+pub type DaeDiffFn<'a> =
+    dyn FnMut(Scalar, &[Scalar], &[Scalar], &mut [Scalar]) -> Result<(), SimError> + 'a;
 
 /// A function that evaluates the algebraic constraints of a DAE.
 ///
 /// `g(t, x, z, result)` — computes 0 = g(t, x, z)
-pub type DaeAlgFn<'a> = dyn FnMut(Scalar, &[Scalar], &[Scalar], &mut [Scalar]) -> Result<(), SimError> + 'a;
+pub type DaeAlgFn<'a> =
+    dyn FnMut(Scalar, &[Scalar], &[Scalar], &mut [Scalar]) -> Result<(), SimError> + 'a;
 
 /// Index-1 DAE solver using backward Euler discretization.
 ///
@@ -167,8 +169,14 @@ mod tests {
 
         // At t=1.0, verify final state
         let t_expected: Scalar = 1.0;
-        assert!((x[0] - t_expected.sin()).abs() < 0.01, "x final error too large");
-        assert!((z[0] - t_expected.cos()).abs() < 0.05, "z final error too large at t=1.0");
+        assert!(
+            (x[0] - t_expected.sin()).abs() < 0.01,
+            "x final error too large"
+        );
+        assert!(
+            (z[0] - t_expected.cos()).abs() < 0.05,
+            "z final error too large at t=1.0"
+        );
     }
 
     #[test]

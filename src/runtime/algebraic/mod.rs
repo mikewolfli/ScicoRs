@@ -155,7 +155,18 @@ impl AlgebraicLoopDetector {
     }
 }
 
-/// Tarjan's SCC algorithm for directed graphs.
+/// Tarjan's SCC algorithm for directed graphs, implemented iteratively.
+///
+/// The classic formulation is recursive, but an explicit work stack is used
+/// here: a diagram can legitimately contain a long chain of blocks (imported or
+/// generated models reach thousands of nodes), and a recursive `strongconnect`
+/// would overflow the thread stack around that size. The iterative form is
+/// algorithmically identical — same index/lowlink bookkeeping, same SCC emission
+/// order — so results are unchanged for every input the recursive version
+/// handled.
+///
+/// Each frame records the node and how many of its neighbours have already been
+/// visited, which is what replaces the recursion's program counter.
 fn tarjan_scc(graph: &HashMap<BlockId, Vec<BlockId>>) -> Vec<Vec<BlockId>> {
     let mut index_counter = 0usize;
     let mut stack: Vec<BlockId> = Vec::new();
@@ -164,77 +175,88 @@ fn tarjan_scc(graph: &HashMap<BlockId, Vec<BlockId>>) -> Vec<Vec<BlockId>> {
     let mut lowlinks: HashMap<BlockId, usize> = HashMap::new();
     let mut sccs: Vec<Vec<BlockId>> = Vec::new();
 
-    #[allow(clippy::too_many_arguments)]
-    fn strongconnect(
-        v: &BlockId,
-        graph: &HashMap<BlockId, Vec<BlockId>>,
-        index_counter: &mut usize,
-        indices: &mut HashMap<BlockId, usize>,
-        lowlinks: &mut HashMap<BlockId, usize>,
-        stack: &mut Vec<BlockId>,
-        on_stack: &mut HashSet<BlockId>,
-        sccs: &mut Vec<Vec<BlockId>>,
-    ) {
-        indices.insert(v.clone(), *index_counter);
-        lowlinks.insert(v.clone(), *index_counter);
-        *index_counter += 1;
-        stack.push(v.clone());
-        on_stack.insert(v.clone());
+    // A node's neighbours, defaulting to empty for a leaf.
+    let neighbors_of =
+        |v: &BlockId| -> &[BlockId] { graph.get(v).map(|n| n.as_slice()).unwrap_or(&[]) };
 
-        if let Some(neighbors) = graph.get(v) {
-            for w in neighbors {
-                if !indices.contains_key(w) {
-                    strongconnect(
-                        w,
-                        graph,
-                        index_counter,
-                        indices,
-                        lowlinks,
-                        stack,
-                        on_stack,
-                        sccs,
-                    );
-                    let v_low = lowlinks[v];
-                    let w_low = lowlinks[w];
-                    lowlinks.insert(v.clone(), v_low.min(w_low));
-                } else if on_stack.contains(w) {
-                    let v_low = lowlinks[v];
-                    let w_idx = indices[w];
-                    lowlinks.insert(v.clone(), v_low.min(w_idx));
-                }
-            }
-        }
-
-        if lowlinks.get(v) == indices.get(v) {
-            let mut component: Vec<BlockId> = Vec::new();
-            loop {
-                let w = stack.pop().unwrap();
-                on_stack.remove(&w);
-                component.push(w.clone());
-                if w == *v {
-                    break;
-                }
-            }
-            if !component.is_empty() {
-                component.sort();
-                sccs.push(component);
-            }
-        }
+    /// One suspended call to the recursive formulation.
+    struct Frame {
+        node: BlockId,
+        child_index: usize,
     }
 
     let all_nodes: Vec<BlockId> = graph.keys().cloned().collect();
-    for node in &all_nodes {
-        if !indices.contains_key(node) {
-            strongconnect(
-                node,
-                graph,
-                &mut index_counter,
-                &mut indices,
-                &mut lowlinks,
-                &mut stack,
-                &mut on_stack,
-                &mut sccs,
-            );
+    for root in &all_nodes {
+        if indices.contains_key(root) {
+            continue;
+        }
+
+        // `work` mirrors the call stack; the last frame is the active call.
+        let mut work: Vec<Frame> = vec![Frame {
+            node: root.clone(),
+            child_index: 0,
+        }];
+        indices.insert(root.clone(), index_counter);
+        lowlinks.insert(root.clone(), index_counter);
+        index_counter += 1;
+        stack.push(root.clone());
+        on_stack.insert(root.clone());
+
+        while let Some(frame) = work.last_mut() {
+            let v = frame.node.clone();
+            let neighbors = neighbors_of(&v);
+
+            if frame.child_index < neighbors.len() {
+                let w = neighbors[frame.child_index].clone();
+                frame.child_index += 1;
+
+                if !indices.contains_key(&w) {
+                    // "Recurse" into `w`.
+                    indices.insert(w.clone(), index_counter);
+                    lowlinks.insert(w.clone(), index_counter);
+                    index_counter += 1;
+                    stack.push(w.clone());
+                    on_stack.insert(w.clone());
+                    work.push(Frame {
+                        node: w,
+                        child_index: 0,
+                    });
+                } else if on_stack.contains(&w) {
+                    let v_low = lowlinks[&v];
+                    let w_idx = indices[&w];
+                    lowlinks.insert(v.clone(), v_low.min(w_idx));
+                }
+                continue;
+            }
+
+            // All neighbours visited: this call is returning.
+            if lowlinks.get(&v) == indices.get(&v) {
+                let mut component: Vec<BlockId> = Vec::new();
+                // Pop until this node, which closes its SCC.
+                while let Some(w) = stack.pop() {
+                    on_stack.remove(&w);
+                    let done = w == v;
+                    component.push(w);
+                    if done {
+                        break;
+                    }
+                }
+                if !component.is_empty() {
+                    component.sort();
+                    sccs.push(component);
+                }
+            }
+
+            work.pop();
+            // Propagate this node's lowlink into its parent, exactly as the
+            // `lowlinks[parent] = min(lowlinks[parent], lowlinks[child])`
+            // line after the recursive call does.
+            if let Some(parent) = work.last() {
+                let p = parent.node.clone();
+                let p_low = lowlinks[&p];
+                let v_low = lowlinks[&v];
+                lowlinks.insert(p, p_low.min(v_low));
+            }
         }
     }
 
@@ -730,5 +752,123 @@ mod tests {
 
         let ok = vec![vec![2.0, 1.0], vec![1.0, 3.0]];
         assert!(!NumericalGuard::is_numerically_singular(&ok, 1e-10));
+    }
+
+    /// The iterative Tarjan must agree with a straightforward reference
+    /// implementation on the same graph, so the rewrite did not change results.
+    #[test]
+    fn test_tarjan_scc_matches_reference_on_varied_graphs() {
+        // Reference: repeated forward reachability closure, which is O(V*E) but
+        // obviously correct and independent of the algorithm under test.
+        fn reference_sccs(graph: &HashMap<BlockId, Vec<BlockId>>) -> Vec<Vec<BlockId>> {
+            let nodes: Vec<BlockId> = graph.keys().cloned().collect();
+            let reach = |start: &BlockId| -> HashSet<BlockId> {
+                let mut seen = HashSet::new();
+                let mut stack = vec![start.clone()];
+                while let Some(n) = stack.pop() {
+                    if !seen.insert(n.clone()) {
+                        continue;
+                    }
+                    if let Some(ns) = graph.get(&n) {
+                        stack.extend(ns.iter().cloned());
+                    }
+                }
+                seen
+            };
+            let mut out: Vec<Vec<BlockId>> = Vec::new();
+            let mut assigned: HashSet<BlockId> = HashSet::new();
+            for n in &nodes {
+                if assigned.contains(n) {
+                    continue;
+                }
+                let from_n = reach(n);
+                // The component of `n` is every node mutually reachable with it.
+                let mut comp: Vec<BlockId> = from_n
+                    .iter()
+                    .filter(|m| reach(m).contains(n))
+                    .cloned()
+                    .collect();
+                for c in &comp {
+                    assigned.insert(c.clone());
+                }
+                comp.sort();
+                if !comp.is_empty() {
+                    out.push(comp);
+                }
+            }
+            out.sort();
+            out
+        }
+
+        // Build a graph from an edge list; `BlockId` is a String.
+        let build = |edges: &[(&str, &str)]| -> HashMap<BlockId, Vec<BlockId>> {
+            let mut g: HashMap<BlockId, Vec<BlockId>> = HashMap::new();
+            for (a, b) in edges {
+                g.entry(a.to_string()).or_default().push(b.to_string());
+                g.entry(b.to_string()).or_default();
+            }
+            g
+        };
+
+        let cases: Vec<Vec<(&str, &str)>> = vec![
+            vec![],                                                           // empty
+            vec![("a", "b")],                         // single edge, no cycle
+            vec![("a", "b"), ("b", "a")],             // 2-cycle
+            vec![("a", "b"), ("b", "c"), ("c", "a")], // 3-cycle
+            vec![("a", "a")],                         // self loop
+            vec![("a", "b"), ("b", "c")],             // chain
+            vec![("a", "b"), ("c", "d")],             // two components
+            vec![("a", "b"), ("b", "a"), ("c", "d"), ("d", "c"), ("b", "c")], // joined cycles
+            vec![("a", "b"), ("b", "c"), ("c", "b"), ("c", "d")], // cycle in the middle
+        ];
+
+        for (i, edges) in cases.iter().enumerate() {
+            let g = build(edges);
+            let mut got = tarjan_scc(&g);
+            got.sort();
+            let want = reference_sccs(&g);
+            assert_eq!(got, want, "SCC mismatch for case {i}: edges={edges:?}");
+        }
+    }
+
+    /// A long chain used to risk a stack overflow because the traversal was
+    /// recursive. It must now complete for a deeply nested diagram.
+    #[test]
+    fn test_tarjan_handles_a_deep_chain_without_overflow() {
+        // 50_000 nodes in a single path; a recursive implementation would blow
+        // the default 8 MiB thread stack well before this.
+        let depth = 50_000usize;
+        let mut graph: HashMap<BlockId, Vec<BlockId>> = HashMap::new();
+        for i in 0..depth {
+            let from = format!("n{}", i);
+            let to = format!("n{}", i + 1);
+            graph.entry(from).or_default().push(to.clone());
+            graph.entry(to).or_default();
+        }
+
+        let sccs = tarjan_scc(&graph);
+        // A path has no cycles, so every node is its own singleton component.
+        assert_eq!(
+            sccs.len(),
+            depth + 1,
+            "a chain of {depth} edges must yield {} singleton SCCs",
+            depth + 1
+        );
+        assert!(sccs.iter().all(|c| c.len() == 1));
+    }
+
+    /// The same depth but closed into one giant cycle: exactly one SCC.
+    #[test]
+    fn test_tarjan_handles_a_deep_cycle() {
+        let depth = 20_000usize;
+        let mut graph: HashMap<BlockId, Vec<BlockId>> = HashMap::new();
+        for i in 0..depth {
+            let from = format!("n{}", i);
+            let to = format!("n{}", (i + 1) % depth);
+            graph.entry(from).or_default().push(to);
+        }
+        let sccs = tarjan_scc(&graph);
+        assert_eq!(sccs.len(), 1, "a single cycle is one SCC");
+        assert_eq!(sccs[0].len(), depth);
     }
 }

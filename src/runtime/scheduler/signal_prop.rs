@@ -7,8 +7,71 @@
 use crate::core::block::BlockId;
 use crate::core::diagram::Diagram;
 use crate::core::error::SimError;
-use crate::core::types::{PortDirection, Scalar, SignalValue};
+use crate::core::types::{PortDirection, Scalar, SignalValue, Time};
 use std::collections::HashMap;
+
+/// Upper bound on the number of steps a single delay line may hold.
+///
+/// A model with `delay = 1 s` at `dt = 1e-6` asks for 1e6 steps; the buffer is
+/// allocated lazily so this bounds eventual size, not an up-front reservation.
+/// Beyond this the delay is clamped and the effective lag is shorter than
+/// requested, which is preferable to an unbounded allocation.
+const MAX_DELAY_STEPS: usize = 1_000_000;
+
+/// A bounded history for one delayed link.
+///
+/// `capacity` is the number of steps of delay. The line holds `capacity + 1`
+/// samples so that the sample published at step `t` is the one pushed at step
+/// `t - capacity`: the current sample must be pushed *before* the delayed one is
+/// read, but must not yet be published.
+#[derive(Debug, Clone)]
+struct DelayLine {
+    /// Samples, oldest first.
+    history: std::collections::VecDeque<SignalValue>,
+    /// Number of steps of delay (`>= 1`).
+    steps: usize,
+}
+
+impl DelayLine {
+    fn new(steps: usize) -> Self {
+        let steps = steps.max(1);
+        Self {
+            // Deliberately NOT `with_capacity(steps + 1)`: a large `delay/dt`
+            // (e.g. a 1 s delay at dt = 1e-6) would eagerly reserve tens of MiB
+            // per delayed link before a single sample is stored. The deque grows
+            // to `steps + 1` entries as the line fills, so capacity tracks actual
+            // use instead of the theoretical maximum.
+            history: std::collections::VecDeque::new(),
+            steps,
+        }
+    }
+
+    /// Push a new sample, keeping `steps + 1` samples so the line can expose the
+    /// value from exactly `steps` calls ago.
+    ///
+    /// The extra entry matters: the newest sample is pushed *before* the delayed
+    /// one is read, so a buffer of exactly `steps` would expose the sample from
+    /// `steps - 1` ago and the effective delay would be one step short.
+    fn push(&mut self, value: SignalValue) {
+        self.history.push_back(value);
+        while self.history.len() > self.steps + 1 {
+            self.history.pop_front();
+        }
+    }
+
+    /// The value delayed by exactly `steps` samples, if the line has filled.
+    ///
+    /// Returns `None` until enough history exists: a signal that has not arrived
+    /// yet is absent, not zero.
+    fn delayed(&self) -> Option<&SignalValue> {
+        if self.history.len() < self.steps + 1 {
+            return None;
+        }
+        // Full: the newest sample is at the back, so the one from `steps` calls
+        // ago is at the front.
+        self.history.front()
+    }
+}
 
 /// A cache of signal values for all ports in a diagram.
 ///
@@ -20,6 +83,14 @@ pub struct SignalCache {
     current: HashMap<(BlockId, String), SignalValue>,
     /// Previous time-step signal values (for edge detection)
     previous: HashMap<(BlockId, String), SignalValue>,
+    /// Per-link delay lines, keyed by source `(block, port)`.
+    ///
+    /// Only links with `delay > 0` appear here. A bounded ring per link keeps
+    /// memory proportional to `delay / dt`, not to the run length.
+    delays: HashMap<(BlockId, String), DelayLine>,
+    /// Current step size used to convert each link's `delay` into a number of
+    /// steps (`steps = ceil(delay / dt)`, at least 1).
+    pub dt: Time,
 }
 
 impl SignalCache {
@@ -28,6 +99,8 @@ impl SignalCache {
         Self {
             current: HashMap::new(),
             previous: HashMap::new(),
+            delays: HashMap::new(),
+            dt: 0.0,
         }
     }
 
@@ -43,6 +116,95 @@ impl SignalCache {
             }
         }
         cache
+    }
+
+    /// Initialize the cache, sizing a delay line for every link that needs one.
+    ///
+    /// `dt` is the nominal step size; a link's `delay` becomes
+    /// `max(1, ceil(delay / dt))` steps of history. Links with a non-positive or
+    /// non-finite delay get no line and propagate immediately, which is the
+    /// documented meaning of a zero delay.
+    pub fn from_diagram_with_dt(diagram: &Diagram, dt: Time) -> Self {
+        let mut cache = Self::from_diagram(diagram);
+        cache.dt = dt;
+        cache.configure_delays(diagram);
+        cache
+    }
+
+    /// (Re)create the delay lines for every delayed link in `diagram`.
+    ///
+    /// Called on construction and whenever the topology or step size changes.
+    /// Existing history is preserved for links that are still delayed, so a
+    /// `dt` change does not silently discard in-flight signals.
+    pub fn configure_delays(&mut self, diagram: &Diagram) {
+        let mut wanted: HashMap<(BlockId, String), usize> = HashMap::new();
+        if self.dt.is_finite() && self.dt > 0.0 {
+            for link in diagram.links().iter() {
+                if !link.delay.is_finite() || link.delay <= 0.0 {
+                    continue;
+                }
+                // `ceil` on a raw ratio is unsafe: `3.0 * 0.1 / 0.1` evaluates to
+                // 3.0000000000000004, so a request for exactly 3 steps would
+                // silently become 4. Snap to the nearest integer when the ratio
+                // is within a relative epsilon of it, then take the ceiling.
+                let ratio = link.delay / self.dt;
+                let nearest = ratio.round();
+                let ratio = if (ratio - nearest).abs() <= 1e-9 * nearest.abs().max(1.0) {
+                    nearest
+                } else {
+                    ratio
+                };
+                let steps = ratio.ceil().max(1.0);
+                // Bound the history so a pathological `delay/dt` cannot grow
+                // without limit. Note the buffer is allocated lazily, so this cap
+                // bounds *eventual* size rather than an up-front reservation.
+                let steps = if steps > MAX_DELAY_STEPS as f64 {
+                    MAX_DELAY_STEPS
+                } else {
+                    steps as usize
+                };
+                wanted
+                    .entry((link.source.0.clone(), link.source.1.clone()))
+                    .and_modify(|s| *s = (*s).max(steps))
+                    .or_insert(steps);
+            }
+        }
+
+        // Drop lines for links that are no longer delayed.
+        self.delays.retain(|k, _| wanted.contains_key(k));
+        // Create or resize the remaining ones, keeping any existing samples.
+        for (key, steps) in wanted {
+            match self.delays.get_mut(&key) {
+                Some(line) if line.steps == steps => {}
+                Some(line) => {
+                    line.steps = steps;
+                    while line.history.len() > steps + 1 {
+                        line.history.pop_front();
+                    }
+                }
+                None => {
+                    self.delays.insert(key, DelayLine::new(steps));
+                }
+            }
+        }
+    }
+
+    /// Number of delayed links currently tracked (observable for tests).
+    pub fn delayed_link_count(&self) -> usize {
+        self.delays.len()
+    }
+
+    /// Push a source value into its delay line, if that link is delayed.
+    ///
+    /// Returns the value that should be published *now* on the far side of the
+    /// link, or `None` when the link is not delayed (the caller should then use
+    /// the live value).
+    fn delay_sample(&mut self, key: &(BlockId, String), value: SignalValue) -> Option<SignalValue> {
+        let line = self.delays.get_mut(key)?;
+        line.push(value);
+        // `capacity` steps of history means the newest sample is published
+        // `capacity` steps late, so read the oldest entry.
+        line.delayed().cloned()
     }
 
     /// Get the current signal value for a port.
@@ -111,6 +273,11 @@ impl Default for SignalCache {
 ///
 /// For each link in the diagram, reads the source block's output port value from
 /// the cache and writes it to the destination block's input port in the cache.
+///
+/// A link with `delay > 0` is routed through its delay line instead of being
+/// copied directly, so a transport delay is actually modelled. Until the line
+/// has filled, the destination receives `None` (the signal has not arrived yet),
+/// which is the physically correct behaviour for a pure delay.
 pub fn propagate_signals(diagram: &Diagram, cache: &mut SignalCache) -> Result<(), SimError> {
     for link in diagram.links().iter() {
         let src_key = (link.source.0.clone(), link.source.1.clone());
@@ -122,7 +289,18 @@ pub fn propagate_signals(diagram: &Diagram, cache: &mut SignalCache) -> Result<(
             .cloned()
             .unwrap_or(SignalValue::None);
 
-        cache.current.insert(dst_key, value);
+        // A delayed link publishes a sample from `delay` seconds ago; the live
+        // value is only used when no delay line exists for this link.
+        let published = match cache.delay_sample(&src_key, value.clone()) {
+            Some(delayed) => delayed,
+            None if cache.delays.contains_key(&src_key) => {
+                // The line exists but is still filling: nothing has arrived yet.
+                SignalValue::None
+            }
+            None => value,
+        };
+
+        cache.current.insert(dst_key, published);
     }
     Ok(())
 }
@@ -238,6 +416,229 @@ mod tests {
         cache.set("Src", "out", SignalValue::Scalar(42.0_f64));
         propagate_signals(&diagram, &mut cache).unwrap();
         assert_eq!(cache.get("Dst", "in"), Some(&SignalValue::Scalar(42.0_f64)));
+    }
+
+    /// A zero-delay link is a direct feedthrough: the destination sees the
+    /// source value in the same step.
+    #[test]
+    fn test_zero_delay_link_is_a_direct_feedthrough() {
+        let mut diagram = Diagram::new("d0");
+        let mut src = SimpleBlock::new("Src", "Source");
+        src.declare_output("out", SignalType::Continuous);
+        let mut dst = SimpleBlock::new("Dst", "Sink");
+        dst.declare_input("in", SignalType::Continuous);
+        diagram.add_block(Box::new(src));
+        diagram.add_block(Box::new(dst));
+        diagram.add_link(Link::new("L1", "Src", "out", "Dst", "in"));
+
+        let mut cache = SignalCache::from_diagram_with_dt(&diagram, 0.1);
+        assert_eq!(
+            cache.delayed_link_count(),
+            0,
+            "a zero-delay link needs no delay line"
+        );
+        cache.set("Src", "out", SignalValue::Scalar(7.0));
+        propagate_signals(&diagram, &mut cache).unwrap();
+        assert_eq!(cache.get("Dst", "in"), Some(&SignalValue::Scalar(7.0)));
+    }
+
+    /// A link with a transport delay must actually delay its samples.
+    ///
+    /// `delay = 3 * dt` means the destination sees the value the source held
+    /// three steps earlier, and sees `None` until the line has filled.
+    #[test]
+    fn test_delayed_link_shifts_samples_by_the_delay() {
+        let dt = 0.1;
+        let mut diagram = Diagram::new("d3");
+        let mut src = SimpleBlock::new("Src", "Source");
+        src.declare_output("out", SignalType::Continuous);
+        let mut dst = SimpleBlock::new("Dst", "Sink");
+        dst.declare_input("in", SignalType::Continuous);
+        diagram.add_block(Box::new(src));
+        diagram.add_block(Box::new(dst));
+        diagram.add_link(Link::new("L1", "Src", "out", "Dst", "in").with_delay(3.0 * dt));
+
+        let mut cache = SignalCache::from_diagram_with_dt(&diagram, dt);
+        assert_eq!(
+            cache.delayed_link_count(),
+            1,
+            "a delayed link must get a delay line"
+        );
+
+        // Drive a ramp: source value = step index.
+        let mut seen = Vec::new();
+        for step in 0..7 {
+            cache.set("Src", "out", SignalValue::Scalar(step as f64));
+            propagate_signals(&diagram, &mut cache).unwrap();
+            seen.push(cache.get("Dst", "in").cloned());
+        }
+
+        // The first three steps are still filling the line, so nothing arrives.
+        let none = SignalValue::None;
+        assert_eq!(
+            seen[0],
+            Some(none.clone()),
+            "step 0 has no delayed value yet"
+        );
+        assert_eq!(
+            seen[1],
+            Some(none.clone()),
+            "step 1 has no delayed value yet"
+        );
+        assert_eq!(
+            seen[2],
+            Some(none.clone()),
+            "step 2 has no delayed value yet"
+        );
+
+        // From step 3 the destination lags the source by exactly 3 steps.
+        for step in 3..7 {
+            let expected = (step - 3) as f64;
+            assert_eq!(
+                seen[step],
+                Some(SignalValue::Scalar(expected)),
+                "step {step} must observe the source value from {expected}"
+            );
+        }
+    }
+
+    /// The delay line's memory is bounded by `delay / dt`, not by the run length.
+    #[test]
+    fn test_delay_line_memory_is_bounded() {
+        let dt = 0.01;
+        let mut diagram = Diagram::new("bounded");
+        let mut src = SimpleBlock::new("Src", "Source");
+        src.declare_output("out", SignalType::Continuous);
+        let mut dst = SimpleBlock::new("Dst", "Sink");
+        dst.declare_input("in", SignalType::Continuous);
+        diagram.add_block(Box::new(src));
+        diagram.add_block(Box::new(dst));
+        // 5 steps of delay.
+        diagram.add_link(Link::new("L1", "Src", "out", "Dst", "in").with_delay(5.0 * dt));
+
+        let mut cache = SignalCache::from_diagram_with_dt(&diagram, dt);
+        for step in 0..1000 {
+            cache.set("Src", "out", SignalValue::Scalar(step as f64));
+            propagate_signals(&diagram, &mut cache).unwrap();
+        }
+        // After 1000 steps the destination must lag by exactly 5: the source
+        // held 994 five steps before the final step (999 - 5 = 994).
+        assert_eq!(
+            cache.get("Dst", "in"),
+            Some(&SignalValue::Scalar(994.0)),
+            "a 5-step delay must still lag by exactly 5 after 1000 steps"
+        );
+    }
+
+    /// A delay shorter than one step must still delay by one step rather than
+    /// silently becoming a feedthrough.
+    #[test]
+    fn test_sub_step_delay_rounds_up_to_one_step() {
+        let dt = 0.1;
+        let mut diagram = Diagram::new("sub");
+        let mut src = SimpleBlock::new("Src", "Source");
+        src.declare_output("out", SignalType::Continuous);
+        let mut dst = SimpleBlock::new("Dst", "Sink");
+        dst.declare_input("in", SignalType::Continuous);
+        diagram.add_block(Box::new(src));
+        diagram.add_block(Box::new(dst));
+        diagram.add_link(Link::new("L1", "Src", "out", "Dst", "in").with_delay(dt / 10.0));
+
+        let mut cache = SignalCache::from_diagram_with_dt(&diagram, dt);
+        cache.set("Src", "out", SignalValue::Scalar(1.0));
+        propagate_signals(&diagram, &mut cache).unwrap();
+        assert_eq!(
+            cache.get("Dst", "in"),
+            Some(&SignalValue::None),
+            "a sub-step delay must not act as a feedthrough on the first step"
+        );
+        cache.set("Src", "out", SignalValue::Scalar(2.0));
+        propagate_signals(&diagram, &mut cache).unwrap();
+        assert_eq!(
+            cache.get("Dst", "in"),
+            Some(&SignalValue::Scalar(1.0)),
+            "the sample from one step earlier must arrive"
+        );
+    }
+
+    /// A delay expressed as an exact multiple of `dt` must produce exactly that
+    /// many steps.
+    ///
+    /// `ceil(delay / dt)` is unsafe in binary floating point: `3.0 * 0.1 / 0.1`
+    /// evaluates to `3.0000000000000004`, so a request for 3 steps silently
+    /// became 4. This walks several multiples that are known to be inexact.
+    #[test]
+    fn test_delay_that_is_an_exact_multiple_of_dt_gets_exact_steps() {
+        for (dt, multiple) in [
+            (0.1, 3.0),
+            (0.1, 5.0),
+            (0.1, 7.0),
+            (0.01, 5.0),
+            (0.2, 3.0),
+            (0.05, 6.0),
+            (0.3, 2.0),
+        ] {
+            let mut diagram = Diagram::new("exact");
+            let mut src = SimpleBlock::new("Src", "Source");
+            src.declare_output("out", SignalType::Continuous);
+            let mut dst = SimpleBlock::new("Dst", "Sink");
+            dst.declare_input("in", SignalType::Continuous);
+            diagram.add_block(Box::new(src));
+            diagram.add_block(Box::new(dst));
+            diagram.add_link(Link::new("L1", "Src", "out", "Dst", "in").with_delay(multiple * dt));
+
+            let mut cache = SignalCache::from_diagram_with_dt(&diagram, dt);
+            let steps = multiple as usize;
+
+            // The first `steps` samples must not have arrived yet...
+            for step in 0..steps {
+                cache.set("Src", "out", SignalValue::Scalar(step as f64));
+                propagate_signals(&diagram, &mut cache).unwrap();
+                assert_eq!(
+                    cache.get("Dst", "in"),
+                    Some(&SignalValue::None),
+                    "dt={dt}, delay={multiple}*dt: step {step} of {steps} must still be in flight"
+                );
+            }
+            // ...and the sample from step 0 must arrive exactly at step `steps`.
+            cache.set("Src", "out", SignalValue::Scalar(steps as f64));
+            propagate_signals(&diagram, &mut cache).unwrap();
+            assert_eq!(
+                cache.get("Dst", "in"),
+                Some(&SignalValue::Scalar(0.0)),
+                "dt={dt}, delay={multiple}*dt: the lag must be exactly {steps} steps"
+            );
+        }
+    }
+
+    /// A non-finite or negative delay is treated as no delay rather than
+    /// producing an unbounded or nonsensical history.
+    #[test]
+    fn test_invalid_delay_is_treated_as_a_feedthrough() {
+        for bad in [0.0, -1.0, Scalar::NAN, Scalar::INFINITY] {
+            let mut diagram = Diagram::new("bad");
+            let mut src = SimpleBlock::new("Src", "Source");
+            src.declare_output("out", SignalType::Continuous);
+            let mut dst = SimpleBlock::new("Dst", "Sink");
+            dst.declare_input("in", SignalType::Continuous);
+            diagram.add_block(Box::new(src));
+            diagram.add_block(Box::new(dst));
+            diagram.add_link(Link::new("L1", "Src", "out", "Dst", "in").with_delay(bad));
+
+            let mut cache = SignalCache::from_diagram_with_dt(&diagram, 0.1);
+            assert_eq!(
+                cache.delayed_link_count(),
+                0,
+                "delay {bad} must not create a delay line"
+            );
+            cache.set("Src", "out", SignalValue::Scalar(9.0));
+            propagate_signals(&diagram, &mut cache).unwrap();
+            assert_eq!(
+                cache.get("Dst", "in"),
+                Some(&SignalValue::Scalar(9.0)),
+                "delay {bad} must behave as a direct feedthrough"
+            );
+        }
     }
 
     #[test]

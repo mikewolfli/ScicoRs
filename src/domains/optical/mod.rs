@@ -14,12 +14,12 @@ pub mod ray;
 pub mod rcwa;
 pub mod wave;
 
-pub use jones_mueller::{
-    JonesMatrix, MuellerMatrix, degree_of_polarisation, jones_vector, stokes_from_jones,
-};
 pub use analysis::{
     AberrationEstimator, modulation_transfer_function, optical_efficiency, rayleigh_criterion,
     system_transmittance,
+};
+pub use jones_mueller::{
+    JonesMatrix, MuellerMatrix, degree_of_polarisation, jones_vector, stokes_from_jones,
 };
 pub use laser::{Fiber, Grating, LaserSource, Waveguide};
 pub use non_sequential::NonSequentialRayTracer;

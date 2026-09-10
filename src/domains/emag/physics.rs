@@ -16,26 +16,34 @@ pub const Z0: Scalar = 376.730313668;
 
 /// Wave number: k = 2π/λ.
 pub fn wave_number(lambda: Scalar) -> Scalar {
-    if lambda <= 0.0 { return 0.0; }
+    if lambda <= 0.0 {
+        return 0.0;
+    }
     2.0 * std::f64::consts::PI / lambda
 }
 
 /// Wavelength: λ = c/f.
 pub fn wavelength(freq: Scalar) -> Scalar {
-    if freq <= 0.0 { return Scalar::INFINITY; }
+    if freq <= 0.0 {
+        return Scalar::INFINITY;
+    }
     C / freq
 }
 
 /// Skin depth: δ = √(2/(ω·μ·σ)).
 pub fn skin_depth(freq: Scalar, mu: Scalar, sigma: Scalar) -> Scalar {
-    if freq <= 0.0 || sigma <= 0.0 { return Scalar::INFINITY; }
+    if freq <= 0.0 || sigma <= 0.0 {
+        return Scalar::INFINITY;
+    }
     let omega = 2.0 * std::f64::consts::PI * freq;
     f64::sqrt(2.0 / (omega * mu * sigma))
 }
 
 /// Wave impedance in medium: η = √(μ/ε).
 pub fn wave_impedance(mu: Scalar, epsilon: Scalar) -> Scalar {
-    if epsilon <= 0.0 { return 0.0; }
+    if epsilon <= 0.0 {
+        return 0.0;
+    }
     f64::sqrt(mu / epsilon)
 }
 

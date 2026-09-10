@@ -6,14 +6,23 @@ use crate::core::types::Scalar;
 ///
 /// L ≈ 2·l·[ln(4·l/d) - 0.75], l in mm, d in mm.
 pub fn bond_wire_inductance(length_mm: Scalar, diameter_mm: Scalar) -> Scalar {
-    if length_mm <= 0.0 || diameter_mm <= 0.0 { return 0.0; }
+    if length_mm <= 0.0 || diameter_mm <= 0.0 {
+        return 0.0;
+    }
     let ratio = 4.0 * length_mm / diameter_mm;
     2.0 * length_mm * (f64::ln(ratio) - 0.75)
 }
 
 /// BGA solder ball capacitance (pF).
-pub fn bga_ball_capacitance(ball_diameter: Scalar, ball_pitch: Scalar, dielectric_er: Scalar, height: Scalar) -> Scalar {
-    if ball_pitch <= 0.0 || height <= 0.0 { return 0.0; }
+pub fn bga_ball_capacitance(
+    ball_diameter: Scalar,
+    ball_pitch: Scalar,
+    dielectric_er: Scalar,
+    height: Scalar,
+) -> Scalar {
+    if ball_pitch <= 0.0 || height <= 0.0 {
+        return 0.0;
+    }
     let r = ball_diameter / 2.0;
     let c_self = 4.0 * std::f64::consts::PI * 8.854e-12 * dielectric_er * r;
     let c_mutual = c_self * r / ball_pitch;
@@ -30,12 +39,21 @@ pub struct PackageParasitics {
 }
 
 impl PackageParasitics {
-    pub fn new() -> Self { Self { r_bond: Vec::new(), l_bond: Vec::new(), c_pad: Vec::new(), c_coupling: Vec::new() } }
+    pub fn new() -> Self {
+        Self {
+            r_bond: Vec::new(),
+            l_bond: Vec::new(),
+            c_pad: Vec::new(),
+            c_coupling: Vec::new(),
+        }
+    }
 
     pub fn total_pin_c(&self, pin: usize) -> Scalar {
         let mut c = *self.c_pad.get(pin).unwrap_or(&0.0);
         for &(i, j, cc) in &self.c_coupling {
-            if i == pin || j == pin { c += cc; }
+            if i == pin || j == pin {
+                c += cc;
+            }
         }
         c
     }
@@ -47,7 +65,11 @@ impl PackageParasitics {
     }
 }
 
-impl Default for PackageParasitics { fn default() -> Self { Self::new() } }
+impl Default for PackageParasitics {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -67,7 +89,12 @@ mod tests {
 
     #[test]
     fn test_package_total_pin_c() {
-        let pkg = PackageParasitics { r_bond: vec![0.1], l_bond: vec![1.0], c_pad: vec![0.5], c_coupling: vec![(0, 1, 0.1)] };
+        let pkg = PackageParasitics {
+            r_bond: vec![0.1],
+            l_bond: vec![1.0],
+            c_pad: vec![0.5],
+            c_coupling: vec![(0, 1, 0.1)],
+        };
         assert!((pkg.total_pin_c(0) - 0.6).abs() < 1e-10);
     }
 }

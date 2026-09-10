@@ -16,7 +16,14 @@ impl CompartmentModel {
 
     /// One-compartment oral absorption (first-order):
     /// C(t) = (F·Dose·ka) / (Vd·(ka - ke)) · (exp(-ke·t) - exp(-ka·t))
-    pub fn two_compartment_oral(ka: Scalar, ke: Scalar, vd: Scalar, dose: Scalar, t: Scalar, f: Scalar) -> Scalar {
+    pub fn two_compartment_oral(
+        ka: Scalar,
+        ke: Scalar,
+        vd: Scalar,
+        dose: Scalar,
+        t: Scalar,
+        f: Scalar,
+    ) -> Scalar {
         if (ka - ke).abs() < 1e-15 {
             // Absorption and elimination rates equal — use limiting form
             (f * dose / vd) * t * (-ke * t).exp()
@@ -34,7 +41,13 @@ impl CompartmentModel {
     ///
     /// `doses` — list of (time, amount) for input into the first compartment.
     /// Returns a Vec of concentration time-courses, one per compartment.
-    pub fn simulate(&self, doses: &[(Scalar, Scalar)], dt: Scalar, t_end: Scalar, n_comp: usize) -> Vec<Vec<Scalar>> {
+    pub fn simulate(
+        &self,
+        doses: &[(Scalar, Scalar)],
+        dt: Scalar,
+        t_end: Scalar,
+        n_comp: usize,
+    ) -> Vec<Vec<Scalar>> {
         let n = self.volumes.len().min(n_comp);
         let mut amounts = vec![0.0; n];
         let mut results: Vec<Vec<Scalar>> = vec![Vec::new(); n];

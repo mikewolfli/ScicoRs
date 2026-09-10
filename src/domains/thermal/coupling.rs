@@ -25,7 +25,12 @@ pub fn friction_heating(friction_force: Scalar, velocity: Scalar) -> Scalar {
 ///
 /// Returns the heat transfer rate (W) between a surface and a fluid.
 /// Positive when heat flows from surface to fluid.
-pub fn convective_heat_transfer(h: Scalar, area: Scalar, t_surface: Scalar, t_fluid: Scalar) -> Scalar {
+pub fn convective_heat_transfer(
+    h: Scalar,
+    area: Scalar,
+    t_surface: Scalar,
+    t_fluid: Scalar,
+) -> Scalar {
     h * area * (t_surface - t_fluid)
 }
 

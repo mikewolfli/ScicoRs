@@ -6,18 +6,39 @@ use crate::domains::chemical::ReactionKinetics;
 /// Catalytic reactor model.
 #[derive(Debug, Clone)]
 pub struct CatalyticReactor {
-    pub length: Scalar, pub diameter: Scalar,
-    pub epsilon: Scalar, pub rho_cat: Scalar,
+    pub length: Scalar,
+    pub diameter: Scalar,
+    pub epsilon: Scalar,
+    pub rho_cat: Scalar,
     pub deactivation_rate: Scalar,
     pub activity: Vec<Scalar>,
 }
 
 impl CatalyticReactor {
-    pub fn new(length: Scalar, diameter: Scalar, epsilon: Scalar, rho_cat: Scalar, deact_rate: Scalar, n_points: usize) -> Self {
-        Self { length, diameter, epsilon, rho_cat, deactivation_rate: deact_rate, activity: vec![1.0; n_points] }
+    pub fn new(
+        length: Scalar,
+        diameter: Scalar,
+        epsilon: Scalar,
+        rho_cat: Scalar,
+        deact_rate: Scalar,
+        n_points: usize,
+    ) -> Self {
+        Self {
+            length,
+            diameter,
+            epsilon,
+            rho_cat,
+            deactivation_rate: deact_rate,
+            activity: vec![1.0; n_points],
+        }
     }
 
-    pub fn profile(&self, inlet: &[Scalar], kinetics: &ReactionKinetics, t: Scalar) -> Result<Vec<Vec<Scalar>>, String> {
+    pub fn profile(
+        &self,
+        inlet: &[Scalar],
+        kinetics: &ReactionKinetics,
+        t: Scalar,
+    ) -> Result<Vec<Vec<Scalar>>, String> {
         let n = self.activity.len().max(2);
         let dz = self.length / n as Scalar;
         let mut profiles = vec![vec![0.0; inlet.len()]; n];

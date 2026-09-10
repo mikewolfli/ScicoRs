@@ -55,11 +55,7 @@ pub fn absorption_factor(l: Scalar, g: Scalar, k: Scalar) -> Scalar {
 ///
 /// K_D = C_org / C_aq
 pub fn distribution_coefficient(c_org: Scalar, c_aq: Scalar) -> Scalar {
-    if c_aq != 0.0 {
-        c_org / c_aq
-    } else {
-        0.0
-    }
+    if c_aq != 0.0 { c_org / c_aq } else { 0.0 }
 }
 
 /// Rachford-Rice flash equation.

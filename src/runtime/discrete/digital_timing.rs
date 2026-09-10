@@ -157,10 +157,7 @@ mod tests {
     use super::*;
 
     fn approx_eq(a: Scalar, b: Scalar) {
-        assert!(
-            (a - b).abs() < 1e-10,
-            "expected {b}, got {a}"
-        );
+        assert!((a - b).abs() < 1e-10, "expected {b}, got {a}");
     }
 
     #[test]
@@ -238,12 +235,7 @@ mod tests {
 
     #[test]
     fn detect_hazards_no_glitch() {
-        let signals = vec![
-            (0.0, 0.0),
-            (1e-9, 1.0),
-            (3e-9, 0.0),
-            (5e-9, 1.0),
-        ];
+        let signals = vec![(0.0, 0.0), (1e-9, 1.0), (3e-9, 0.0), (5e-9, 1.0)];
         let hazards = TimingAnalysis::detect_hazards(&signals, 1e-9);
         assert!(hazards.is_empty());
     }

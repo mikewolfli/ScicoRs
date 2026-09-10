@@ -63,6 +63,16 @@ impl Parameter {
     }
 }
 
+/// Whether every entry of a value vector is finite.
+///
+/// Blocks whose configuration is a coefficient or state vector validate the
+/// incoming value with this before storing it. One `NaN` in such a vector would
+/// otherwise propagate into every subsequent evaluation of the block, so a
+/// hand-edited or corrupted file must not be able to introduce one.
+pub fn all_finite(values: &[Scalar]) -> bool {
+    values.iter().all(|v| v.is_finite())
+}
+
 /// A function type for evaluating expression-bound parameters.
 pub type ParamExprFn = Arc<dyn Fn(&HashMap<String, Scalar>) -> Scalar + Send + Sync>;
 

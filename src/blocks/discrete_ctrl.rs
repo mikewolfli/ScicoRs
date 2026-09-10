@@ -5,7 +5,7 @@
 
 use crate::core::block::{Block, BlockId};
 use crate::core::error::SimError;
-use crate::core::param::ParameterSet;
+use crate::core::param::{Parameter, ParameterSet, all_finite};
 use crate::core::port::{Port, PortSet};
 use crate::core::signal::Signal;
 use crate::core::types::{
@@ -235,6 +235,51 @@ impl Block for DiscreteIntegratorBlock {
     fn clone_block(&self) -> Box<dyn Block> {
         Box::new(self.clone())
     }
+    fn configuration(&self) -> Vec<Parameter> {
+        vec![
+            Parameter::new_tunable("dt", SignalValue::Scalar(self.dt), "block configuration"),
+            Parameter::new_tunable(
+                "initial",
+                SignalValue::Scalar(self.initial),
+                "block configuration",
+            ),
+            Parameter::new_tunable("max", SignalValue::Scalar(self.max), "block configuration"),
+            Parameter::new_tunable("min", SignalValue::Scalar(self.min), "block configuration"),
+        ]
+    }
+    fn apply_configuration(&mut self, params: &[Parameter]) -> usize {
+        let mut applied = 0;
+        for p in params {
+            if let SignalValue::Scalar(v) = p.value {
+                // A non-finite value from a hand-edited file is rejected
+                // rather than stored: it would propagate into every
+                // downstream computation as NaN.
+                if !v.is_finite() {
+                    continue;
+                }
+                match p.name.as_str() {
+                    "dt" => {
+                        self.dt = v;
+                        applied += 1;
+                    }
+                    "initial" => {
+                        self.initial = v;
+                        applied += 1;
+                    }
+                    "max" => {
+                        self.max = v;
+                        applied += 1;
+                    }
+                    "min" => {
+                        self.min = v;
+                        applied += 1;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        applied
+    }
 }
 
 // ──────────────────────────────────────────────
@@ -362,6 +407,84 @@ impl Block for DiscreteFilter {
     }
     fn clone_block(&self) -> Box<dyn Block> {
         Box::new(self.clone())
+    }
+
+    /// Persist the filter kind and its coefficients.
+    ///
+    /// The coefficients are written as two separate named vectors rather than
+    /// one combined list: an in-band separator would have to be a value JSON
+    /// cannot represent (`NaN` becomes `null`, which the reader then rejects),
+    /// making the saved file unloadable.
+    fn configuration(&self) -> Vec<Parameter> {
+        match &self.kind {
+            DiscreteFilterKind::Fir(f) => vec![
+                Parameter::new_config(
+                    "kind",
+                    SignalValue::String("fir".to_string()),
+                    "filter kind",
+                ),
+                Parameter::new_config(
+                    "b",
+                    SignalValue::Vector(f.coefficients.clone()),
+                    "feedforward coefficients",
+                ),
+            ],
+            DiscreteFilterKind::Iir(f) => vec![
+                Parameter::new_config(
+                    "kind",
+                    SignalValue::String("iir".to_string()),
+                    "filter kind",
+                ),
+                Parameter::new_config(
+                    "b",
+                    SignalValue::Vector(f.b.clone()),
+                    "feedforward coefficients",
+                ),
+                Parameter::new_config(
+                    "a",
+                    SignalValue::Vector(f.a.clone()),
+                    "feedback coefficients",
+                ),
+            ],
+        }
+    }
+    fn apply_configuration(&mut self, params: &[Parameter]) -> usize {
+        let mut kind: Option<&str> = None;
+        let mut b: Option<&Vec<Scalar>> = None;
+        let mut a: Option<&Vec<Scalar>> = None;
+        for p in params {
+            match (p.name.as_str(), &p.value) {
+                ("kind", SignalValue::String(s)) => kind = Some(s.as_str()),
+                // A coefficient vector is rejected unless every entry is finite;
+                // one `NaN` would silently poison the whole impulse response.
+                ("b", SignalValue::Vector(v)) if all_finite(v) => b = Some(v),
+                ("a", SignalValue::Vector(v)) if all_finite(v) => a = Some(v),
+                _ => {}
+            }
+        }
+        match kind {
+            Some("fir") => {
+                let Some(b) = b.filter(|v| !v.is_empty()) else {
+                    return 0;
+                };
+                self.kind = DiscreteFilterKind::Fir(FIRFilter::new(b));
+                2
+            }
+            Some("iir") => {
+                let (Some(b), Some(a)) = (b, a) else {
+                    return 0;
+                };
+                // `IIRFilter::new` divides by `a[0]` and asserts it is non-zero,
+                // so an empty or zero-leading `a` must be refused here rather
+                // than panicking on a hand-edited file.
+                if b.is_empty() || a.is_empty() || a[0] == 0.0 {
+                    return 0;
+                }
+                self.kind = DiscreteFilterKind::Iir(IIRFilter::new(b, a));
+                3
+            }
+            _ => 0,
+        }
     }
 }
 
@@ -509,6 +632,57 @@ impl Block for DiscretePID {
     }
     fn clone_block(&self) -> Box<dyn Block> {
         Box::new(self.clone())
+    }
+    fn configuration(&self) -> Vec<Parameter> {
+        vec![
+            Parameter::new_tunable("dt", SignalValue::Scalar(self.dt), "block configuration"),
+            Parameter::new_tunable("kd", SignalValue::Scalar(self.kd), "block configuration"),
+            Parameter::new_tunable("ki", SignalValue::Scalar(self.ki), "block configuration"),
+            Parameter::new_tunable("kp", SignalValue::Scalar(self.kp), "block configuration"),
+            Parameter::new_tunable("max", SignalValue::Scalar(self.max), "block configuration"),
+            Parameter::new_tunable("min", SignalValue::Scalar(self.min), "block configuration"),
+        ]
+    }
+    fn apply_configuration(&mut self, params: &[Parameter]) -> usize {
+        let mut applied = 0;
+        for p in params {
+            if let SignalValue::Scalar(v) = p.value {
+                // A non-finite value from a hand-edited file is rejected
+                // rather than stored: it would propagate into every
+                // downstream computation as NaN.
+                if !v.is_finite() {
+                    continue;
+                }
+                match p.name.as_str() {
+                    "dt" => {
+                        self.dt = v;
+                        applied += 1;
+                    }
+                    "kd" => {
+                        self.kd = v;
+                        applied += 1;
+                    }
+                    "ki" => {
+                        self.ki = v;
+                        applied += 1;
+                    }
+                    "kp" => {
+                        self.kp = v;
+                        applied += 1;
+                    }
+                    "max" => {
+                        self.max = v;
+                        applied += 1;
+                    }
+                    "min" => {
+                        self.min = v;
+                        applied += 1;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        applied
     }
 }
 

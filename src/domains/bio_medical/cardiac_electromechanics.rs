@@ -24,8 +24,8 @@ impl CardiacModel {
         }
         // Contractility tracks the mean calcium level, linking the electrical
         // and mechanical sides of the model.
-        let mean_ca: Scalar = self.ca_transient.iter().sum::<Scalar>()
-            / self.ca_transient.len().max(1) as Scalar;
+        let mean_ca: Scalar =
+            self.ca_transient.iter().sum::<Scalar>() / self.ca_transient.len().max(1) as Scalar;
         self.contractility = 0.5 + 0.5 * mean_ca;
     }
     pub fn frank_starling(volume: Scalar, contractility: Scalar) -> Scalar {

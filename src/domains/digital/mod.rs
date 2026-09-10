@@ -11,20 +11,18 @@
 //! - **cpu**: Simple CPU model with register file, pipeline, RISC instruction set
 //! - **timing**: Setup/hold timing analysis, clock jitter, propagation delay
 
-pub mod gates;
-pub mod sequential;
 pub mod combinational;
 pub mod cpu;
+pub mod gates;
+pub mod sequential;
 pub mod timing;
 
-pub use gates::{
-    LogicBuffer, LogicNand, LogicNor, LogicNotBlock, LogicXnor, TriStateBuffer,
-};
+pub use combinational::{ALUBlock, ALUOp, AdderBlock, DecoderBlock, MultiplierBlock};
+pub use cpu::{CpuInstruction, CpuProgram, PipelineStages, SimpleCpu};
+pub use gates::{LogicBuffer, LogicNand, LogicNor, LogicNotBlock, LogicXnor, TriStateBuffer};
 pub use sequential::{
     DFlipFlopBlock, JKFlipFlopBlock, LatchBlock, ShiftRegisterBlock, TFlipFlopBlock,
 };
-pub use combinational::{ALUBlock, ALUOp, AdderBlock, DecoderBlock, MultiplierBlock};
-pub use cpu::{PipelineStages, SimpleCpu, CpuInstruction, CpuProgram};
 pub use timing::{GateConnection, TimingAnalyzer};
 
 pub mod event_driven;

@@ -162,6 +162,39 @@ pub trait Block: Send + Sync {
     /// Clone this block into a boxed trait object.
     /// Required for hierarchical component instantiation.
     fn clone_block(&self) -> Box<dyn Block>;
+
+    /// The block's configuration as a serializable parameter set.
+    ///
+    /// Concrete blocks keep their settings in typed private fields, which
+    /// `params()` does not reflect. Overriding this lets serialization persist
+    /// the real configuration instead of an empty list, and lets
+    /// [`crate::blocks::factory::BlockFactory`] restore it after loading.
+    ///
+    /// The default returns the block's declared `params()` set, so blocks that
+    /// already store configuration there keep working unchanged.
+    fn configuration(&self) -> Vec<crate::core::param::Parameter> {
+        let mut keys: Vec<&String> = self.params().param_keys().collect();
+        keys.sort();
+        keys.into_iter()
+            .filter_map(|k| self.params().get(k).cloned())
+            .collect()
+    }
+
+    /// Apply previously serialized configuration.
+    ///
+    /// Returns the number of parameters actually applied. The default applies
+    /// any parameter the block declares in `params()`, and ignores the rest so
+    /// a stale file cannot inject unknown settings.
+    fn apply_configuration(&mut self, params: &[crate::core::param::Parameter]) -> usize {
+        let mut applied = 0;
+        for p in params {
+            if self.params().get(&p.name).is_some() {
+                self.params_mut().add(p.clone());
+                applied += 1;
+            }
+        }
+        applied
+    }
 }
 
 /// A simple concrete block implementation for testing and stateless operations.

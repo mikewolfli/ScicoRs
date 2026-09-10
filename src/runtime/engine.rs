@@ -64,6 +64,15 @@ pub struct SimEngine {
     solver: Box<dyn OdeSolver>,
     /// Scheduler for block execution ordering, signal propagation, and event handling.
     scheduler: Box<dyn Scheduler>,
+    /// Event channel shared with the scheduler: the engine schedules events here
+    /// (e.g. from a breakpoint or an external trigger) and the scheduler drains
+    /// it during the event phase.
+    event_queue: crate::runtime::event::EventQueue,
+    /// Total number of zero crossings detected across the run (mirrored from the
+    /// scheduler so the count is observable from the engine).
+    zero_crossings_detected: u64,
+    /// Total number of events dispatched to blocks across the run.
+    events_dispatched: u64,
 }
 
 impl std::fmt::Debug for SimEngine {
@@ -115,6 +124,7 @@ impl SimEngine {
         // Initialize default sequential scheduler
         let mut scheduler: Box<dyn Scheduler> = Box::new(SequentialScheduler::new());
         scheduler.initialize(&diagram)?;
+        scheduler.set_step_size(ctx.dt, &diagram);
 
         Ok(Self {
             context: ctx,
@@ -123,7 +133,38 @@ impl SimEngine {
             execution_order,
             solver: Box::new(Euler::new()),
             scheduler,
+            event_queue: crate::runtime::event::EventQueue::new(),
+            zero_crossings_detected: 0,
+            events_dispatched: 0,
         })
+    }
+
+    /// Total number of zero crossings detected so far in this run.
+    ///
+    /// Mirrors the scheduler's own count, so the value is observable without
+    /// reaching into the scheduler.
+    pub fn zero_crossings_detected(&self) -> u64 {
+        self.zero_crossings_detected
+    }
+
+    /// Total number of events dispatched to blocks so far in this run.
+    ///
+    /// This is the end-to-end proof that the event chain is wired: a crossing
+    /// detected in one step is enqueued, drained, and delivered to a block, and
+    /// each delivery increments this counter.
+    pub fn events_dispatched(&self) -> u64 {
+        self.events_dispatched
+    }
+
+    /// The engine-side event queue, for scheduling external events.
+    pub fn event_queue(&self) -> &crate::runtime::event::EventQueue {
+        &self.event_queue
+    }
+
+    /// Mutable access to the engine-side event queue, for scheduling events
+    /// before a step (they are drained during the next event phase).
+    pub fn event_queue_mut(&mut self) -> &mut crate::runtime::event::EventQueue {
+        &mut self.event_queue
     }
 
     /// Replace the default Euler solver with a custom ODE solver.
@@ -173,6 +214,9 @@ impl SimEngine {
 
         // Re-initialize scheduler
         self.scheduler.initialize(&self.diagram)?;
+        // Re-size delay lines: the topology may have changed, so a link's
+        // `delay` may now need a new history depth.
+        self.scheduler.set_step_size(self.context.dt, &self.diagram);
 
         // Rebuild state manager
         let mut combined_decl = StateDeclaration::new();
@@ -478,12 +522,25 @@ impl SimEngine {
             }
         }
 
-        // ── Phase 6: Zero-crossing detection ──
-        for block_id in &self.execution_order {
-            if let Some(block) = self.diagram.get_block(block_id) {
-                let _crossings = block.zero_crossings();
-                // Future: densify step around zero-crossing points
-            }
+        // ── Phase 6: Events — detect zero crossings, enqueue, dispatch ──
+        //
+        // Delegated to the scheduler, which owns the crossing history, the event
+        // queue, and dispatch bookkeeping. This is what makes a crossing actually
+        // reach a block: the engine previously computed `zero_crossings()` and
+        // discarded it, leaving the whole event subsystem unreachable.
+        {
+            let dispatched = self.scheduler.run_event_phase(
+                &self.diagram,
+                &self.execution_order,
+                self.context.t,
+                &mut self.event_queue,
+            )?;
+            self.events_dispatched += dispatched as u64;
+
+            // Mirror the scheduler's crossing count so the engine stays
+            // observable without the caller having to reach into the scheduler.
+            let detected = self.scheduler.crossing_count();
+            self.zero_crossings_detected = detected;
         }
 
         // ── Phase 7: Advance time ──
@@ -650,9 +707,9 @@ impl SimEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::block::SimpleBlock;
+    use crate::core::block::{Block, SimpleBlock};
     use crate::core::link::Link;
-    use crate::core::types::SignalType;
+    use crate::core::types::{SignalType, SignalValue};
 
     /// Helper: create a simple source→sink diagram.
     fn create_test_diagram() -> Diagram {
@@ -665,6 +722,289 @@ mod tests {
         d.add_block(Box::new(sink));
         d.add_link(Link::new("l1", "src", "out", "sink", "in"));
         d
+    }
+
+    /// Zero crossings must be genuinely detected from the engine path and must be
+    /// observable. Before this was fixed, Phase 6 computed `zero_crossings()` and
+    /// discarded the result, so the entire event subsystem was unreachable.
+    #[test]
+    fn test_engine_detects_and_exposes_zero_crossings() {
+        use crate::core::block::{Block, BlockId};
+        use crate::core::error::SimError;
+        use crate::core::param::ParameterSet;
+        use crate::core::port::PortSet;
+        use crate::core::state::StateDeclaration;
+        use crate::core::types::ComponentStatus;
+        use crate::core::types::{PortDirection, Scalar, SignalValue, Time};
+
+        /// A block whose single crossing signal follows `sin` of the sim time,
+        /// so it really does cross zero as the simulation advances.
+        #[derive(Debug, Clone)]
+        struct Oscillator {
+            id: BlockId,
+            ports: PortSet,
+            params: ParameterSet,
+            status: ComponentStatus,
+            t: Time,
+        }
+
+        impl Oscillator {
+            fn new(id: &str) -> Self {
+                let mut ports = PortSet::new();
+                ports.add(crate::core::port::Port::new(
+                    "out",
+                    PortDirection::Output,
+                    SignalType::Continuous,
+                ));
+                Self {
+                    id: id.to_string(),
+                    ports,
+                    params: ParameterSet::new(),
+                    status: ComponentStatus::Inactive,
+                    t: 0.0,
+                }
+            }
+        }
+
+        impl Block for Oscillator {
+            fn id(&self) -> &BlockId {
+                &self.id
+            }
+            fn block_type(&self) -> &str {
+                "Oscillator"
+            }
+            fn ports(&self) -> &PortSet {
+                &self.ports
+            }
+            fn ports_mut(&mut self) -> &mut PortSet {
+                &mut self.ports
+            }
+            fn params(&self) -> &ParameterSet {
+                &self.params
+            }
+            fn params_mut(&mut self) -> &mut ParameterSet {
+                &mut self.params
+            }
+            fn status(&self) -> ComponentStatus {
+                self.status
+            }
+            fn set_status(&mut self, s: ComponentStatus) {
+                self.status = s;
+            }
+            fn set_time(&mut self, t: Time) {
+                self.t = t;
+            }
+            fn time(&self) -> Time {
+                self.t
+            }
+            fn state_declaration(&self) -> StateDeclaration {
+                StateDeclaration::new()
+            }
+            fn init(&mut self) -> Result<(), SimError> {
+                self.status = ComponentStatus::Ready;
+                Ok(())
+            }
+            fn output(&mut self) -> Result<(), SimError> {
+                // A sine wave: crosses zero twice per period.
+                let v = (std::f64::consts::TAU * self.t).sin();
+                if let Some(p) = self.ports.get_mut("out") {
+                    p.write(crate::core::signal::Signal::new(
+                        SignalType::Continuous,
+                        SignalValue::Scalar(v),
+                        self.t,
+                    ));
+                }
+                Ok(())
+            }
+            fn derivative(&self) -> Result<Vec<Scalar>, SimError> {
+                Ok(Vec::new())
+            }
+            fn update(&mut self) -> Result<(), SimError> {
+                Ok(())
+            }
+            /// The crossing signal is the output value itself.
+            fn zero_crossings(&self) -> Vec<Scalar> {
+                vec![(std::f64::consts::TAU * self.t).sin()]
+            }
+            fn terminate(&mut self) -> Result<(), SimError> {
+                Ok(())
+            }
+            fn clone_block(&self) -> Box<dyn Block> {
+                Box::new(self.clone())
+            }
+            fn execute_phase(
+                &mut self,
+                phase: crate::core::types::ExecutionPhase,
+            ) -> Result<(), SimError> {
+                match phase {
+                    crate::core::types::ExecutionPhase::Init => self.init(),
+                    crate::core::types::ExecutionPhase::Output => self.output(),
+                    _ => Ok(()),
+                }
+            }
+        }
+
+        let mut d = Diagram::new("osc");
+        d.add_block(Box::new(Oscillator::new("osc")));
+        let mut engine = SimEngine::new(d, TimeConfig::new(0.0, 2.0, 0.01)).unwrap();
+        engine.init().unwrap();
+        engine.start().unwrap();
+
+        let mut steps = 0;
+        while steps < 300 {
+            match engine.step().unwrap() {
+                SimStepResult::Finished => break,
+                _ => steps += 1,
+            }
+        }
+
+        assert!(
+            engine.zero_crossings_detected() > 0,
+            "a sine wave over 2 s must produce zero crossings, got {}",
+            engine.zero_crossings_detected()
+        );
+        // The chain must be closed end to end: each detected crossing is
+        // enqueued and then *dispatched to a block*. Before the event phase was
+        // wired, the count could be non-zero while nothing ever reached a block.
+        assert!(
+            engine.events_dispatched() > 0,
+            "detected crossings must actually be delivered to blocks, got {} dispatches",
+            engine.events_dispatched()
+        );
+    }
+
+    /// A diagram with no crossing signals must not produce crossings or events.
+    #[test]
+    fn test_engine_without_crossings_produces_no_events() {
+        let d = create_test_diagram();
+        let mut engine = SimEngine::new(d, TimeConfig::until(0.1)).unwrap();
+        engine.init().unwrap();
+        engine.start().unwrap();
+        for _ in 0..10 {
+            if engine.step().is_err() {
+                break;
+            }
+        }
+        // `SimpleBlock::zero_crossings` returns nothing, so there is nothing to
+        // detect, enqueue, or dispatch.
+        assert_eq!(engine.zero_crossings_detected(), 0);
+        assert_eq!(engine.events_dispatched(), 0);
+    }
+
+    /// An event scheduled on the engine's queue must be delivered to its target
+    /// block during the next event phase, proving the engine queue is wired to
+    /// the scheduler.
+    #[test]
+    fn test_engine_scheduled_event_reaches_its_target_block() {
+        use crate::runtime::event::{Event, EventType};
+        use std::sync::{Arc, Mutex};
+
+        /// Records every `ExecutionPhase::Event` it receives.
+        #[derive(Debug, Clone)]
+        struct EventSink {
+            inner: SimpleBlock,
+            received: Arc<Mutex<u64>>,
+        }
+
+        impl Block for EventSink {
+            fn id(&self) -> &crate::core::block::BlockId {
+                self.inner.id()
+            }
+            fn block_type(&self) -> &str {
+                "EventSink"
+            }
+            fn ports(&self) -> &crate::core::port::PortSet {
+                self.inner.ports()
+            }
+            fn ports_mut(&mut self) -> &mut crate::core::port::PortSet {
+                self.inner.ports_mut()
+            }
+            fn params(&self) -> &crate::core::param::ParameterSet {
+                self.inner.params()
+            }
+            fn params_mut(&mut self) -> &mut crate::core::param::ParameterSet {
+                self.inner.params_mut()
+            }
+            fn status(&self) -> crate::core::types::ComponentStatus {
+                self.inner.status()
+            }
+            fn set_status(&mut self, s: crate::core::types::ComponentStatus) {
+                self.inner.set_status(s);
+            }
+            fn set_time(&mut self, t: crate::core::types::Time) {
+                self.inner.set_time(t);
+            }
+            fn time(&self) -> crate::core::types::Time {
+                self.inner.time()
+            }
+            fn init(&mut self) -> Result<(), SimError> {
+                Ok(())
+            }
+            fn output(&mut self) -> Result<(), SimError> {
+                Ok(())
+            }
+            fn derivative(&self) -> Result<Vec<Scalar>, SimError> {
+                Ok(Vec::new())
+            }
+            fn update(&mut self) -> Result<(), SimError> {
+                Ok(())
+            }
+            fn zero_crossings(&self) -> Vec<Scalar> {
+                Vec::new()
+            }
+            fn terminate(&mut self) -> Result<(), SimError> {
+                Ok(())
+            }
+            fn clone_block(&self) -> Box<dyn Block> {
+                Box::new(self.clone())
+            }
+            fn execute_phase(
+                &mut self,
+                phase: crate::core::types::ExecutionPhase,
+            ) -> Result<(), SimError> {
+                if matches!(phase, crate::core::types::ExecutionPhase::Event) {
+                    *self.received.lock().unwrap() += 1;
+                }
+                Ok(())
+            }
+        }
+
+        let received = Arc::new(Mutex::new(0u64));
+        let sink = {
+            let mut inner = SimpleBlock::new("target", "EventSink");
+            inner.declare_input("u", SignalType::Continuous);
+            EventSink {
+                inner,
+                received: Arc::clone(&received),
+            }
+        };
+        let mut d = Diagram::new("scheduled");
+        d.add_block(Box::new(sink));
+
+        let mut engine = SimEngine::new(d, TimeConfig::until(0.05)).unwrap();
+        engine.init().unwrap();
+        engine.start().unwrap();
+
+        // Schedule an event addressed to the block, due at the current time.
+        engine
+            .event_queue_mut()
+            .push(
+                Event::new("ext", 0.0, EventType::External, SignalValue::Scalar(0.0))
+                    .with_target("target"),
+            )
+            .expect("the queue must accept the event");
+
+        let _ = engine.step();
+
+        assert_eq!(
+            *received.lock().unwrap(),
+            1,
+            "the scheduled event must be delivered to its target block exactly once"
+        );
+        assert!(
+            engine.events_dispatched() >= 1,
+            "the dispatch must be counted on the engine"
+        );
     }
 
     #[test]

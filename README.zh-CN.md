@@ -1,6 +1,6 @@
-# SCIcoRS — 全人类统一仿真内核
+# SCIcoRS — 统一仿真内核
 
-[English Documentation](README.md) | [开发清单](docs/checklist/CHECKLIST.MD) | [路线图](docs/blueprints/roadmap.md) | [设计原则](docs/blueprints/principle.md)
+[English Documentation](README.md) | [更新日志](CHANGELOG.md) | [开发清单](docs/checklist/CHECKLIST.MD) | [路线图](docs/blueprints/roadmap.md) | [设计原则](docs/blueprints/principle.md)
 
 > **SCI**entific **co**mputing & **R**eality **S**imulation —— 一个统一所有学科、尺度和领域的工程与科学仿真通用内核。
 
@@ -243,4 +243,4 @@ println!("完成 {} 步，仿真时间 {}", summary.total_steps, summary.final_t
 
 ---
 
-[English Documentation](README.md) | [开发清单](docs/checklist/CHECKLIST.MD) | [路线图](docs/blueprints/roadmap.md) | [设计原则](docs/blueprints/principle.md) | [开发日志](docs/log/)
+[English Documentation](README.md) | [更新日志](CHANGELOG.md) | [开发清单](docs/checklist/CHECKLIST.MD) | [路线图](docs/blueprints/roadmap.md) | [设计原则](docs/blueprints/principle.md) | [开发日志](docs/log/)

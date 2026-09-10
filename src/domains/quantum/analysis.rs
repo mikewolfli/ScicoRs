@@ -1,7 +1,7 @@
 //! Quantum analysis tools: fidelity, trace distance, entanglement entropy, mutual information.
 
-use crate::core::types::Scalar;
 use super::state::{ComplexScalar, DensityMatrix, QuantumState};
+use crate::core::types::Scalar;
 
 /// Fidelity between two density matrices: F(ρ, σ) = Tr(√(√ρ·σ·√ρ)).
 pub fn fidelity_density(rho: &DensityMatrix, sigma: &DensityMatrix) -> Scalar {
@@ -72,10 +72,7 @@ pub fn quantum_mutual_information(
 /// `counts`: outcome counts indexed by basis state.
 /// `num_shots`: total number of measurements.
 /// Returns list of (outcome, probability) pairs.
-pub fn measurement_statistics(
-    counts: &[usize],
-    num_shots: usize,
-) -> Vec<(usize, Scalar)> {
+pub fn measurement_statistics(counts: &[usize], num_shots: usize) -> Vec<(usize, Scalar)> {
     let total = num_shots.max(1) as Scalar;
     counts
         .iter()

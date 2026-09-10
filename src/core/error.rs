@@ -156,19 +156,34 @@ impl SimError {
 
     /// Create an `E0001` (missing port) error.
     pub fn missing_port(port: impl Into<String>) -> Self {
-        Self::new(ErrorCode::MissingPort, format!("missing port: {}", port.into()))
+        Self::new(
+            ErrorCode::MissingPort,
+            format!("missing port: {}", port.into()),
+        )
     }
 
     /// Create an `E0002` (missing parameter) error.
     pub fn missing_param(param: impl Into<String>) -> Self {
-        Self::new(ErrorCode::MissingParameter, format!("missing parameter: {}", param.into()))
+        Self::new(
+            ErrorCode::MissingParameter,
+            format!("missing parameter: {}", param.into()),
+        )
     }
 
     /// Create an `E0003` (signal type mismatch) error.
-    pub fn signal_mismatch(port: impl Into<String>, expected: impl Into<String>, actual: impl Into<String>) -> Self {
+    pub fn signal_mismatch(
+        port: impl Into<String>,
+        expected: impl Into<String>,
+        actual: impl Into<String>,
+    ) -> Self {
         Self::new(
             ErrorCode::SignalTypeMismatch,
-            format!("signal type mismatch on port '{}': expected {}, got {}", port.into(), expected.into(), actual.into()),
+            format!(
+                "signal type mismatch on port '{}': expected {}, got {}",
+                port.into(),
+                expected.into(),
+                actual.into()
+            ),
         )
     }
 
@@ -194,12 +209,18 @@ impl SimError {
 
     /// Create an `E0301` (no execution order) error.
     pub fn no_execution_order() -> Self {
-        Self::new(ErrorCode::NoExecutionOrder, "no execution order available; call compute_execution_order first")
+        Self::new(
+            ErrorCode::NoExecutionOrder,
+            "no execution order available; call compute_execution_order first",
+        )
     }
 
     /// Create an `E0304` (algebraic cycle) error.
     pub fn algebraic_cycle() -> Self {
-        Self::new(ErrorCode::AlgebraicCycle, "cycle detected in diagram topology")
+        Self::new(
+            ErrorCode::AlgebraicCycle,
+            "cycle detected in diagram topology",
+        )
     }
 }
 

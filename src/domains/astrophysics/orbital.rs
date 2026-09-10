@@ -1,9 +1,9 @@
 //! Orbital mechanics: Keplerian elements, two-body/N-body propagators.
 
-use crate::core::coord::Coord3D;
-use crate::core::types::Scalar;
 use super::celestial_body::CelestialBody;
 use super::physics::GRAVITATIONAL;
+use crate::core::coord::Coord3D;
+use crate::core::types::Scalar;
 
 /// Keplerian orbital elements.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -17,10 +17,21 @@ pub struct KeplerianElements {
 }
 
 impl KeplerianElements {
-    pub fn new(a: Scalar, e: Scalar, i: Scalar, raan: Scalar, arg_peri: Scalar, nu: Scalar) -> Self {
+    pub fn new(
+        a: Scalar,
+        e: Scalar,
+        i: Scalar,
+        raan: Scalar,
+        arg_peri: Scalar,
+        nu: Scalar,
+    ) -> Self {
         Self {
-            semi_major_axis: a, eccentricity: e, inclination: i,
-            raan, argument_of_periapsis: arg_peri, true_anomaly: nu,
+            semi_major_axis: a,
+            eccentricity: e,
+            inclination: i,
+            raan,
+            argument_of_periapsis: arg_peri,
+            true_anomaly: nu,
         }
     }
 
@@ -99,15 +110,22 @@ impl KeplerianElements {
 
         let a = 1.0 / (2.0 / r - v2 / gm);
         let e_vec = [
-            ((v2 / gm - 1.0 / r) * pos.x - (pos.x * vel[0] + pos.y * vel[1] + pos.z * vel[2]) * vel[0] / gm),
-            ((v2 / gm - 1.0 / r) * pos.y - (pos.x * vel[0] + pos.y * vel[1] + pos.z * vel[2]) * vel[1] / gm),
-            ((v2 / gm - 1.0 / r) * pos.z - (pos.x * vel[0] + pos.y * vel[1] + pos.z * vel[2]) * vel[2] / gm),
+            ((v2 / gm - 1.0 / r) * pos.x
+                - (pos.x * vel[0] + pos.y * vel[1] + pos.z * vel[2]) * vel[0] / gm),
+            ((v2 / gm - 1.0 / r) * pos.y
+                - (pos.x * vel[0] + pos.y * vel[1] + pos.z * vel[2]) * vel[1] / gm),
+            ((v2 / gm - 1.0 / r) * pos.z
+                - (pos.x * vel[0] + pos.y * vel[1] + pos.z * vel[2]) * vel[2] / gm),
         ];
         let e = (e_vec[0] * e_vec[0] + e_vec[1] * e_vec[1] + e_vec[2] * e_vec[2]).sqrt();
         let i = (h_vec[2] / h).acos();
         let n_vec = [-h_vec[1], h_vec[0], 0.0];
         let n = (n_vec[0] * n_vec[0] + n_vec[1] * n_vec[1]).sqrt();
-        let raan = if n > 0.0 { n_vec[0].atan2(n_vec[1]) } else { 0.0 };
+        let raan = if n > 0.0 {
+            n_vec[0].atan2(n_vec[1])
+        } else {
+            0.0
+        };
         let w = if n > 0.0 {
             let dot = (n_vec[0] * e_vec[0] + n_vec[1] * e_vec[1]) / (n * e);
             dot.acos().copysign(e_vec[2])
@@ -119,21 +137,33 @@ impl KeplerianElements {
         let nu = if r_dot_v >= 0.0 {
             ((e_vec[0] * pos.x + e_vec[1] * pos.y + e_vec[2] * pos.z) / (e * r)).acos()
         } else {
-            2.0 * std::f64::consts::PI - ((e_vec[0] * pos.x + e_vec[1] * pos.y + e_vec[2] * pos.z) / (e * r)).acos()
+            2.0 * std::f64::consts::PI
+                - ((e_vec[0] * pos.x + e_vec[1] * pos.y + e_vec[2] * pos.z) / (e * r)).acos()
         };
 
-        Self { semi_major_axis: a, eccentricity: e, inclination: i, raan, argument_of_periapsis: w, true_anomaly: nu }
+        Self {
+            semi_major_axis: a,
+            eccentricity: e,
+            inclination: i,
+            raan,
+            argument_of_periapsis: w,
+            true_anomaly: nu,
+        }
     }
 
     pub fn solve_kepler(&self, mean_anomaly: Scalar) -> Scalar {
         let mut e = mean_anomaly;
         for _ in 0..100 {
-            let delta = (e - self.eccentricity * e.sin() - mean_anomaly) / (1.0 - self.eccentricity * e.cos());
+            let delta = (e - self.eccentricity * e.sin() - mean_anomaly)
+                / (1.0 - self.eccentricity * e.cos());
             e -= delta;
-            if delta.abs() < 1e-12 { break; }
+            if delta.abs() < 1e-12 {
+                break;
+            }
         }
         // True anomaly from eccentric anomaly: ν = 2·atan(√((1+e)/(1-e))·tan(E/2))
-        2.0 * (((1.0 + self.eccentricity) / (1.0 - self.eccentricity)).sqrt() * (e / 2.0).tan()).atan()
+        2.0 * (((1.0 + self.eccentricity) / (1.0 - self.eccentricity)).sqrt() * (e / 2.0).tan())
+            .atan()
     }
 }
 
@@ -143,25 +173,43 @@ pub struct TwoBodyPropagator {
 }
 
 impl TwoBodyPropagator {
-    pub fn new(gm: Scalar) -> Self { Self { gm } }
+    pub fn new(gm: Scalar) -> Self {
+        Self { gm }
+    }
 
     pub fn propagate(&self, elements: &KeplerianElements, dt: Scalar) -> KeplerianElements {
         let mean_motion = (self.gm / elements.semi_major_axis.powi(3)).sqrt();
         let mean_anomaly = elements.true_anomaly + mean_motion * dt;
         let e_anomaly = elements.solve_kepler(mean_anomaly);
-        let nu = 2.0 * (((1.0 + elements.eccentricity) / (1.0 - elements.eccentricity)).sqrt() * (e_anomaly / 2.0).tan()).atan();
+        let nu = 2.0
+            * (((1.0 + elements.eccentricity) / (1.0 - elements.eccentricity)).sqrt()
+                * (e_anomaly / 2.0).tan())
+            .atan();
         KeplerianElements {
             true_anomaly: nu % (2.0 * std::f64::consts::PI),
             ..*elements
         }
     }
 
-    pub fn propagate_with_perturbation(&self, elements: &KeplerianElements, dt: Scalar, j2: Scalar) -> KeplerianElements {
+    pub fn propagate_with_perturbation(
+        &self,
+        elements: &KeplerianElements,
+        dt: Scalar,
+        j2: Scalar,
+    ) -> KeplerianElements {
         let n = elements.period(self.gm).recip();
-        let raan_dot = -1.5 * n * j2 * (super::physics::EARTH_RADIUS / elements.semi_major_axis).powi(2)
-            * elements.inclination.cos() / (1.0 - elements.eccentricity * elements.eccentricity).powi(2);
-        let arg_peri_dot = 0.75 * n * j2 * (super::physics::EARTH_RADIUS / elements.semi_major_axis).powi(2)
-            * (4.0 - 5.0 * elements.inclination.sin().powi(2)) / (1.0 - elements.eccentricity * elements.eccentricity).powi(2);
+        let raan_dot = -1.5
+            * n
+            * j2
+            * (super::physics::EARTH_RADIUS / elements.semi_major_axis).powi(2)
+            * elements.inclination.cos()
+            / (1.0 - elements.eccentricity * elements.eccentricity).powi(2);
+        let arg_peri_dot = 0.75
+            * n
+            * j2
+            * (super::physics::EARTH_RADIUS / elements.semi_major_axis).powi(2)
+            * (4.0 - 5.0 * elements.inclination.sin().powi(2))
+            / (1.0 - elements.eccentricity * elements.eccentricity).powi(2);
 
         let mut result = self.propagate(elements, dt);
         result.raan += raan_dot * dt;
@@ -186,21 +234,28 @@ impl NBodySolver {
         let bodies = &self.bodies;
         let softening = self.softening;
         use rayon::prelude::*;
-        (0..n).into_par_iter().map(|i| {
-            let mut ax = 0.0; let mut ay = 0.0; let mut az = 0.0;
-            for j in 0..n {
-                if i == j { continue; }
-                let dx = bodies[j].position.x - bodies[i].position.x;
-                let dy = bodies[j].position.y - bodies[i].position.y;
-                let dz = bodies[j].position.z - bodies[i].position.z;
-                let r2 = dx * dx + dy * dy + dz * dz + softening * softening;
-                let inv_r3 = 1.0 / (r2 * r2.sqrt());
-                ax += GRAVITATIONAL * bodies[j].mass * dx * inv_r3;
-                ay += GRAVITATIONAL * bodies[j].mass * dy * inv_r3;
-                az += GRAVITATIONAL * bodies[j].mass * dz * inv_r3;
-            }
-            [ax, ay, az]
-        }).collect()
+        (0..n)
+            .into_par_iter()
+            .map(|i| {
+                let mut ax = 0.0;
+                let mut ay = 0.0;
+                let mut az = 0.0;
+                for j in 0..n {
+                    if i == j {
+                        continue;
+                    }
+                    let dx = bodies[j].position.x - bodies[i].position.x;
+                    let dy = bodies[j].position.y - bodies[i].position.y;
+                    let dz = bodies[j].position.z - bodies[i].position.z;
+                    let r2 = dx * dx + dy * dy + dz * dz + softening * softening;
+                    let inv_r3 = 1.0 / (r2 * r2.sqrt());
+                    ax += GRAVITATIONAL * bodies[j].mass * dx * inv_r3;
+                    ay += GRAVITATIONAL * bodies[j].mass * dy * inv_r3;
+                    az += GRAVITATIONAL * bodies[j].mass * dz * inv_r3;
+                }
+                [ax, ay, az]
+            })
+            .collect()
     }
 
     pub fn leapfrog_step(&mut self, dt: Scalar) {
@@ -227,7 +282,9 @@ impl NBodySolver {
         let mut ke = 0.0;
         let mut pe = 0.0;
         for body in &self.bodies {
-            let v2 = body.velocity[0] * body.velocity[0] + body.velocity[1] * body.velocity[1] + body.velocity[2] * body.velocity[2];
+            let v2 = body.velocity[0] * body.velocity[0]
+                + body.velocity[1] * body.velocity[1]
+                + body.velocity[2] * body.velocity[2];
             ke += 0.5 * body.mass * v2;
         }
         for i in 0..self.bodies.len() {
@@ -247,16 +304,26 @@ impl NBodySolver {
     pub fn total_angular_momentum(&self) -> [Scalar; 3] {
         let mut l = [0.0; 3];
         for body in &self.bodies {
-            l[0] += body.mass * (body.position.y * body.velocity[2] - body.position.z * body.velocity[1]);
-            l[1] += body.mass * (body.position.z * body.velocity[0] - body.position.x * body.velocity[2]);
-            l[2] += body.mass * (body.position.x * body.velocity[1] - body.position.y * body.velocity[0]);
+            l[0] += body.mass
+                * (body.position.y * body.velocity[2] - body.position.z * body.velocity[1]);
+            l[1] += body.mass
+                * (body.position.z * body.velocity[0] - body.position.x * body.velocity[2]);
+            l[2] += body.mass
+                * (body.position.x * body.velocity[1] - body.position.y * body.velocity[0]);
         }
         l
     }
 }
 
 /// J2 precession rate of RAAN (rad/s).
-pub fn j2_precession_rate(semi_major: Scalar, eccentricity: Scalar, inclination: Scalar, j2: Scalar, radius: Scalar, gm: Scalar) -> Scalar {
+pub fn j2_precession_rate(
+    semi_major: Scalar,
+    eccentricity: Scalar,
+    inclination: Scalar,
+    j2: Scalar,
+    radius: Scalar,
+    gm: Scalar,
+) -> Scalar {
     let n = (gm / semi_major.powi(3)).sqrt();
     -1.5 * n * j2 * (radius / semi_major).powi(2) * inclination.cos()
         / (1.0 - eccentricity * eccentricity).powi(2)
@@ -266,10 +333,10 @@ pub struct J2PrecessionRate;
 
 #[cfg(test)]
 mod tests {
+    use super::super::celestial_body::{earth, sun};
+    use super::super::physics::{AU, SOLAR_GM};
     use super::*;
     use crate::core::coord::Coord3D;
-    use super::super::physics::{SOLAR_GM, AU};
-    use super::super::celestial_body::{earth, sun};
     #[test]
     fn test_circular_orbit_energy() {
         let oe = KeplerianElements::new(AU, 0.0, 0.0, 0.0, 0.0, 0.0);

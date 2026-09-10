@@ -46,7 +46,9 @@ pub use measurement::{
     concurrence, projective_measurement, quantum_state_tomography,
 };
 pub use mps::MatrixProductState;
-pub use noise_channel::{NoiseChannel, NoiseDensityMatrix, pure_state_density, PAULI_X, PAULI_Y, PAULI_Z};
+pub use noise_channel::{
+    NoiseChannel, NoiseDensityMatrix, PAULI_X, PAULI_Y, PAULI_Z, pure_state_density,
+};
 pub use physics::*;
 pub use qec::{LogicalQubit, QuantumCode};
 pub use schrodinger::{

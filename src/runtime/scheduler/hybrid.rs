@@ -7,7 +7,7 @@
 use crate::core::block::BlockId;
 use crate::core::diagram::Diagram;
 use crate::core::error::SimError;
-use crate::core::types::Scalar;
+use crate::core::types::{ExecutionPhase, Scalar};
 use std::collections::HashMap;
 
 /// Classification of a block's execution type.
@@ -206,11 +206,16 @@ pub fn execute_deriv_phase(diagram: &Diagram, order: &[BlockId]) -> Result<Vec<S
 ///
 /// This design separates validation (done here with `&Diagram`) from mutation
 /// (done by the engine with `&mut Diagram`), avoiding borrow conflicts.
-pub fn execute_update_phase(diagram: &Diagram, order: &[BlockId]) -> Result<(), SimError> {
+/// Validate that every block in `order` still exists, without mutating anything.
+///
+/// Use this from a context that only has `&Diagram`. The phase that actually
+/// advances discrete state is [`execute_update_phase_mut`], which needs mutable
+/// access; `SimEngine` owns that access and calls it.
+pub fn validate_update_phase(diagram: &Diagram, order: &[BlockId]) -> Result<(), SimError> {
     for block_id in order {
         if diagram.get_block(block_id).is_none() {
             return Err(SimError::runtime(format!(
-                "execute_update_phase: block '{}' not found",
+                "validate_update_phase: block '{}' not found",
                 block_id
             )));
         }
@@ -218,25 +223,95 @@ pub fn execute_update_phase(diagram: &Diagram, order: &[BlockId]) -> Result<(), 
     Ok(())
 }
 
-/// Execute the DetectEvents phase (zero-crossing detection).
+/// Execute the Update phase **mutably**, actually running each block's update.
 ///
-/// A crossing is reported for every zero-crossing signal whose value is within
-/// `1e-12` of zero. The second tuple element is the index of the crossing
-/// within the block's `zero_crossings()` result — the only stable identifier a
-/// zero crossing carries.
-pub fn execute_event_detection(diagram: &Diagram, order: &[BlockId]) -> Vec<(BlockId, Scalar)> {
-    let mut events = Vec::new();
+/// The immutable variant above exists only to validate the block set; this is
+/// the one that advances discrete state.
+pub fn execute_update_phase_mut(diagram: &mut Diagram, order: &[BlockId]) -> Result<(), SimError> {
     for block_id in order {
-        if let Some(block) = diagram.get_block(block_id) {
-            let crossings = block.zero_crossings();
-            for (i, &val) in crossings.iter().enumerate() {
-                if val.abs() < 1e-12 {
-                    events.push((block_id.clone(), i as Scalar));
-                }
+        let Some(block) = diagram.get_block_mut(block_id) else {
+            return Err(SimError::runtime(format!(
+                "execute_update_phase_mut: block '{}' not found",
+                block_id
+            )));
+        };
+        block.execute_phase(ExecutionPhase::Update)?;
+    }
+    Ok(())
+}
+
+/// Detect zero crossings by **sign change**, not by exact magnitude.
+///
+/// The previous test was `val.abs() < 1e-12`: it required the block's crossing
+/// signal to land within `1e-12` of zero at the sampled instant, which a finite
+/// step size makes essentially measure-zero. A signal stepping from `-1e-6` to
+/// `+1e-6` produced `-1e-6` and `+1e-6` and was **never** reported.
+///
+/// A crossing is now detected when a signal changes sign relative to the
+/// previous sample, or when it is exactly zero (which is a genuine crossing that
+/// carries no sign information). `previous` holds the last observed value per
+/// `(block, crossing index)`; pass the same map back on the next step.
+///
+/// The second tuple element is the index of the crossing within the block's
+/// `zero_crossings()` result — the only stable identifier a crossing carries.
+pub fn execute_event_detection_with_state(
+    diagram: &Diagram,
+    order: &[BlockId],
+    previous: &mut HashMap<(BlockId, usize), Scalar>,
+) -> Vec<(BlockId, Scalar)> {
+    let mut events = Vec::new();
+    // Blocks currently present, so stale history can be pruned below.
+    let mut seen: std::collections::HashSet<(BlockId, usize)> = std::collections::HashSet::new();
+    for block_id in order {
+        let Some(block) = diagram.get_block(block_id) else {
+            continue;
+        };
+        let crossings = block.zero_crossings();
+        for (i, &val) in crossings.iter().enumerate() {
+            let key = (block_id.clone(), i);
+            seen.insert(key.clone());
+
+            if !val.is_finite() {
+                // A non-finite sample carries no sign, and leaving the previous
+                // value in place would compare the *next* finite sample against a
+                // value from before the gap, reporting a crossing that never
+                // happened. Forget the history so the signal restarts.
+                previous.remove(&key);
+                continue;
+            }
+
+            let crossed = match previous.get(&key) {
+                // A crossing is a *sign change* between two consecutive samples.
+                // An exact zero is only a crossing when it accompanies a sign
+                // change (or when it is the first sample after a gap): a signal
+                // that merely touches zero and returns has not crossed, and a
+                // signal parked at zero must not re-fire every step.
+                Some(&prev) => (prev < 0.0 && val >= 0.0) || (prev > 0.0 && val <= 0.0),
+                // First finite observation: only an exact zero counts, since
+                // there is no prior sign to compare against.
+                None => val == 0.0,
+            };
+            previous.insert(key, val);
+            if crossed {
+                events.push((block_id.clone(), i as Scalar));
             }
         }
     }
+
+    // Drop history for crossing signals that no longer exist, so a later signal
+    // that reuses the same index is not compared against an unrelated value.
+    previous.retain(|k, _| seen.contains(k));
     events
+}
+
+/// Stateless convenience wrapper around [`execute_event_detection_with_state`].
+///
+/// Without a sign history only exact zeros can be detected, so this is suitable
+/// for a one-shot scan but **not** for detecting crossings across steps. Callers
+/// that sample a running simulation must keep the `previous` map.
+pub fn execute_event_detection(diagram: &Diagram, order: &[BlockId]) -> Vec<(BlockId, Scalar)> {
+    let mut previous = HashMap::new();
+    execute_event_detection_with_state(diagram, order, &mut previous)
 }
 
 #[cfg(test)]
@@ -382,6 +457,104 @@ mod tests {
         assert_eq!(events, vec![("X1".to_string(), 1.0)]);
     }
 
+    /// The old detector required `|val| < 1e-12`, so a signal stepping from
+    /// `-1e-6` to `+1e-6` — a genuine crossing — was never reported. Detection
+    /// must work from the *sign change* between samples.
+    #[test]
+    fn test_event_detection_finds_a_sign_change_between_samples() {
+        let mut diagram = Diagram::new("sign");
+        // A single crossing signal, which we will drive through zero.
+        diagram.add_block(Box::new(CrossingBlock::new("B", vec![-1e-6])));
+        let order = vec!["B".to_string()];
+        let mut history = HashMap::new();
+
+        // First sample: negative, and this is the first observation, so no
+        // crossing yet (there is no previous sign to compare against).
+        let first = execute_event_detection_with_state(&diagram, &order, &mut history);
+        assert!(
+            first.is_empty(),
+            "the first observation cannot establish a crossing, got {first:?}"
+        );
+
+        // Second sample: positive. The signal crossed zero in between, even
+        // though it was never within 1e-12 of zero at a sampled instant.
+        diagram.remove_block("B");
+        diagram.add_block(Box::new(CrossingBlock::new("B", vec![1e-6])));
+        let second = execute_event_detection_with_state(&diagram, &order, &mut history);
+        assert_eq!(
+            second,
+            vec![("B".to_string(), 0.0)],
+            "a sign change must be reported as a crossing"
+        );
+    }
+
+    /// Staying on one side of zero must not produce repeated crossings.
+    #[test]
+    fn test_event_detection_does_not_refire_without_a_sign_change() {
+        let order = vec!["B".to_string()];
+        let mut history = HashMap::new();
+
+        for value in [1.0, 2.0, 3.0, 0.5] {
+            let mut diagram = Diagram::new("same_sign");
+            diagram.add_block(Box::new(CrossingBlock::new("B", vec![value])));
+            let events = execute_event_detection_with_state(&diagram, &order, &mut history);
+            assert!(
+                events.is_empty(),
+                "value {value} keeps the same sign, so it is not a crossing"
+            );
+        }
+    }
+
+    /// A signal that is exactly zero is a crossing even with no sign history.
+    #[test]
+    fn test_event_detection_reports_an_exact_zero() {
+        let mut diagram = Diagram::new("zero");
+        diagram.add_block(Box::new(CrossingBlock::new("Z", vec![0.0])));
+        let mut history = HashMap::new();
+        let events = execute_event_detection_with_state(&diagram, &["Z".to_string()], &mut history);
+        assert_eq!(events, vec![("Z".to_string(), 0.0)]);
+    }
+
+    /// A non-finite crossing signal must be skipped, not reported as a crossing
+    /// and not allowed to poison the history.
+    #[test]
+    fn test_event_detection_skips_non_finite_values() {
+        let mut diagram = Diagram::new("nan");
+        diagram.add_block(Box::new(CrossingBlock::new(
+            "N",
+            vec![Scalar::NAN, Scalar::INFINITY],
+        )));
+        let mut history = HashMap::new();
+        let events = execute_event_detection_with_state(&diagram, &["N".to_string()], &mut history);
+        assert!(events.is_empty(), "non-finite values are not crossings");
+        assert!(
+            history.is_empty(),
+            "non-finite values must not be recorded as a prior sign"
+        );
+    }
+
+    /// Multiple crossing signals on one block are reported with their own index.
+    #[test]
+    fn test_event_detection_reports_each_crossing_index_independently() {
+        let order = vec!["M".to_string()];
+        let mut history = HashMap::new();
+
+        // Seed: index 0 negative, index 1 positive.
+        let mut diagram = Diagram::new("multi");
+        diagram.add_block(Box::new(CrossingBlock::new("M", vec![-1.0, 1.0])));
+        assert!(execute_event_detection_with_state(&diagram, &order, &mut history).is_empty());
+
+        // Only index 1 flips sign.
+        diagram.remove_block("M");
+        diagram.add_block(Box::new(CrossingBlock::new("M", vec![-0.5, -1.0])));
+        let events = execute_event_detection_with_state(&diagram, &order, &mut history);
+        assert_eq!(
+            events,
+            vec![("M".to_string(), 1.0)],
+            "only the crossing signal whose sign flipped may fire"
+        );
+    }
+
     /// Test block that reports a fixed set of zero-crossing signals.
     #[derive(Debug, Clone)]
     struct CrossingBlock {
@@ -466,5 +639,110 @@ mod tests {
         diagram.add_block(Box::new(SimpleBlock::new("B1", "Test")));
         let derivs = execute_deriv_phase(&diagram, &["B1".to_string()]).unwrap();
         assert!(derivs.is_empty());
+    }
+
+    /// A signal that reaches exactly zero and returns to the same side has
+    /// **not** crossed. The previous `sign_change || val == 0.0` test reported
+    /// the zero sample as a crossing even when the signal came from and returned
+    /// to the same sign.
+    ///
+    /// Note: `-1 → 0` *is* a legitimate crossing (the signal moved from negative
+    /// to non-negative), so the test starts from zero to isolate the case where
+    /// the touch carries no sign change at all.
+    #[test]
+    fn test_zero_touch_without_sign_change_is_not_a_crossing() {
+        let order = vec!["T".to_string()];
+        let mut history = HashMap::new();
+
+        // Seed at exactly zero (first observation: one crossing, then history).
+        let mut diagram = Diagram::new("touch");
+        diagram.add_block(Box::new(CrossingBlock::new("T", vec![0.0])));
+        let first = execute_event_detection_with_state(&diagram, &order, &mut history);
+        assert_eq!(first.len(), 1, "the first zero observation is a crossing");
+
+        // Return to zero repeatedly: the sign is unchanged, so this must not
+        // re-fire even though the value is exactly zero.
+        for _ in 0..5 {
+            let events = execute_event_detection_with_state(&diagram, &order, &mut history);
+            assert!(
+                events.is_empty(),
+                "a repeated zero with no sign change is not a new crossing"
+            );
+        }
+    }
+
+    /// A signal parked at exactly zero must not fire a crossing on every step.
+    #[test]
+    fn test_signal_stuck_at_zero_does_not_refire() {
+        let order = vec!["Z".to_string()];
+        let mut history = HashMap::new();
+        let mut total = 0;
+
+        for _ in 0..10 {
+            let mut diagram = Diagram::new("stuck");
+            diagram.add_block(Box::new(CrossingBlock::new("Z", vec![0.0])));
+            total += execute_event_detection_with_state(&diagram, &order, &mut history).len();
+        }
+
+        assert_eq!(
+            total, 1,
+            "a signal at zero may report the initial crossing once, not every step"
+        );
+    }
+
+    /// A non-finite sample must reset the history, so the next finite sample is
+    /// not compared against a value from before the gap.
+    #[test]
+    fn test_non_finite_sample_resets_history_across_the_gap() {
+        let order = vec!["G".to_string()];
+        let mut history = HashMap::new();
+
+        // Seed with a negative value.
+        let mut diagram = Diagram::new("gap");
+        diagram.add_block(Box::new(CrossingBlock::new("G", vec![-1.0])));
+        assert!(execute_event_detection_with_state(&diagram, &order, &mut history).is_empty());
+
+        // A NaN sample must clear the history for this crossing signal.
+        diagram.remove_block("G");
+        diagram.add_block(Box::new(CrossingBlock::new("G", vec![Scalar::NAN])));
+        assert!(execute_event_detection_with_state(&diagram, &order, &mut history).is_empty());
+        assert!(
+            history.is_empty(),
+            "a non-finite sample must forget the prior sign, not carry it across"
+        );
+
+        // The next positive sample must therefore be treated as a fresh start,
+        // not as a sign change from the pre-gap negative value.
+        diagram.remove_block("G");
+        diagram.add_block(Box::new(CrossingBlock::new("G", vec![1.0])));
+        let events = execute_event_detection_with_state(&diagram, &order, &mut history);
+        assert!(
+            events.is_empty(),
+            "the crossing must not be attributed across a NaN gap, got {events:?}"
+        );
+    }
+
+    /// History for a crossing signal that disappears must be dropped, so a later
+    /// signal reusing the same index is not compared against an unrelated value.
+    #[test]
+    fn test_stale_crossing_history_is_pruned() {
+        let order = vec!["S".to_string()];
+        let mut history = HashMap::new();
+
+        // Step 1: two signals, index 1 is positive.
+        let mut diagram = Diagram::new("stale");
+        diagram.add_block(Box::new(CrossingBlock::new("S", vec![-5.0, 7.0])));
+        assert!(execute_event_detection_with_state(&diagram, &order, &mut history).is_empty());
+        assert_eq!(history.len(), 2, "both indices must be tracked");
+
+        // Step 2: back to one signal. Index 1 no longer exists.
+        diagram.remove_block("S");
+        diagram.add_block(Box::new(CrossingBlock::new("S", vec![-5.0])));
+        assert!(execute_event_detection_with_state(&diagram, &order, &mut history).is_empty());
+        assert_eq!(
+            history.len(),
+            1,
+            "history for the vanished crossing signal must be pruned"
+        );
     }
 }

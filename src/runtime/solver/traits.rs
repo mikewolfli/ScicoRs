@@ -135,6 +135,31 @@ impl SolverStats {
         self.steps_accepted + self.steps_rejected
     }
 
+    /// Record whether a step succeeded, based on the solver's own result.
+    ///
+    /// Iterative methods (Newton/DAE) report failure as
+    /// `Ok(NotConverged)`/`Ok(Singular)` rather than `Err`, so callers cannot
+    /// use the `Result` alone to decide. Routing an outcome through this helper
+    /// keeps `steps_accepted`/`steps_rejected` honest.
+    pub fn record_step_outcome(&mut self, result: &SolverStepResult) {
+        if result.is_ok() {
+            self.steps_accepted += 1;
+        } else {
+            self.steps_rejected += 1;
+        }
+    }
+
+    /// Fold another solver's statistics into these, additively.
+    ///
+    /// Inner solvers (e.g. the Newton iteration used by the implicit stiff
+    /// methods) already account for their own accepted/rejected steps and
+    /// evaluations. An outer solver must therefore *merge* those counters
+    /// rather than re-derive the outcome, which would double-count.
+    pub fn merge_step_outcome(&mut self, other: &SolverStats) {
+        self.steps_accepted += other.steps_accepted;
+        self.steps_rejected += other.steps_rejected;
+    }
+
     /// Reset all statistics to zero.
     pub fn reset(&mut self) {
         *self = Self::default();
@@ -200,12 +225,7 @@ pub trait OdeSolver: Send + Sync {
 ///
 /// Given the estimated error, computes the recommended next step size.
 /// Used by all adaptive Runge-Kutta methods.
-pub fn adapt_step_size(
-    error: Scalar,
-    dt: Scalar,
-    config: &SolverConfig,
-    order: u8,
-) -> Scalar {
+pub fn adapt_step_size(error: Scalar, dt: Scalar, config: &SolverConfig, order: u8) -> Scalar {
     // Avoid division by zero / log of zero
     let scale = (error / (config.rtol + config.atol)).max(1e-14);
     let exponent = -(1.0 / (order as Scalar + 1.0));

@@ -100,9 +100,11 @@ fn mutability_from_str(s: &str) -> crate::core::param::ParamMutability {
 }
 
 /// Convert a `SignalValue` into a portable `(kind, json)` pair.
-fn value_to_json(value: &crate::core::types::SignalValue) -> (&'static str, serde_json::Value) {
+fn value_to_json(
+    value: &crate::core::types::SignalValue,
+) -> Result<(&'static str, serde_json::Value), SimError> {
     use crate::core::types::SignalValue as V;
-    match value {
+    Ok(match value {
         V::Scalar(v) => ("scalar", serde_json::json!(v)),
         V::Vector(v) => ("vector", serde_json::json!(v)),
         V::Matrix(rows, cols, data) => (
@@ -113,9 +115,18 @@ fn value_to_json(value: &crate::core::types::SignalValue) -> (&'static str, serd
         V::Boolean(b) => ("boolean", serde_json::json!(b)),
         V::Integer(i) => ("integer", serde_json::json!(i)),
         V::String(s) => ("string", serde_json::json!(s)),
-        V::Tensor(_) => ("none", serde_json::Value::Null),
+        // A tensor cannot be serialized without the tensor module exposing its
+        // shape and data. Report it rather than silently degrading it to
+        // `None`, which would lose the value with no diagnostic.
+        V::Tensor(_) => {
+            return Err(SimError::parse_error(
+                "tensor parameters are not serializable yet; convert the tensor to a \
+                 Matrix or Vector before saving"
+                    .to_string(),
+            ));
+        }
         V::None => ("none", serde_json::Value::Null),
-    }
+    })
 }
 
 /// Rebuild a `SignalValue` from a `(kind, json)` pair.
@@ -191,53 +202,47 @@ fn value_from_json(
 
 /// Serialize a Diagram to a JSON string.
 pub fn diagram_to_json(diagram: &Diagram) -> SerResult<String> {
-    let block_data: Vec<BlockData> = diagram
-        .blocks()
-        .map(|(id, block)| {
-            // Serialize every parameter, not just scalar ones. `keys()` is not
-            // used as the filter here because it also yields expression
-            // parameters, which have no `Parameter` to read back.
-            let mut names: Vec<&String> = block.params().param_keys().collect();
-            names.sort();
-            let params: Vec<ParamData> = names
-                .into_iter()
-                .filter_map(|name| block.params().get(name))
-                .map(|p| {
-                    let (kind, value) = value_to_json(&p.value);
-                    ParamData {
-                        name: p.name.clone(),
-                        kind: kind.to_string(),
-                        value,
-                        description: p.description.clone(),
-                        mutability: mutability_to_str(p.mutability).to_string(),
-                    }
-                })
-                .collect();
+    let mut block_data: Vec<BlockData> = Vec::with_capacity(diagram.block_count());
+    for (id, block) in diagram.blocks() {
+        // Use `configuration()` rather than `params()`: concrete blocks keep
+        // their settings in typed fields, so the raw parameter set is often
+        // empty. This is what makes a saved diagram actually reconstructable.
+        let mut params: Vec<ParamData> = Vec::new();
+        for p in block.configuration() {
+            let (kind, value) = value_to_json(&p.value)?;
+            params.push(ParamData {
+                name: p.name.clone(),
+                kind: kind.to_string(),
+                value,
+                description: p.description.clone(),
+                mutability: mutability_to_str(p.mutability).to_string(),
+            });
+        }
+        params.sort_by(|a, b| a.name.cmp(&b.name));
 
-            let mut ports: Vec<PortData> = block
-                .ports()
-                .iter()
-                .map(|port| PortData {
-                    id: port.id.clone(),
-                    direction: match port.direction {
-                        crate::core::types::PortDirection::Input => "input",
-                        crate::core::types::PortDirection::Output => "output",
-                        crate::core::types::PortDirection::InOut => "inout",
-                    }
-                    .to_string(),
-                    signal_type: format!("{:?}", port.signal_type).to_ascii_lowercase(),
-                })
-                .collect();
-            ports.sort_by(|a, b| a.id.cmp(&b.id));
+        let mut ports: Vec<PortData> = block
+            .ports()
+            .iter()
+            .map(|port| PortData {
+                id: port.id.clone(),
+                direction: match port.direction {
+                    crate::core::types::PortDirection::Input => "input",
+                    crate::core::types::PortDirection::Output => "output",
+                    crate::core::types::PortDirection::InOut => "inout",
+                }
+                .to_string(),
+                signal_type: format!("{:?}", port.signal_type).to_ascii_lowercase(),
+            })
+            .collect();
+        ports.sort_by(|a, b| a.id.cmp(&b.id));
 
-            BlockData {
-                id: id.clone(),
-                block_type: block.block_type().to_string(),
-                parameters: params,
-                ports,
-            }
-        })
-        .collect();
+        block_data.push(BlockData {
+            id: id.clone(),
+            block_type: block.block_type().to_string(),
+            parameters: params,
+            ports,
+        });
+    }
 
     let link_data: Vec<LinkData> = diagram
         .links()
@@ -390,6 +395,31 @@ mod tests {
     use crate::core::block::SimpleBlock;
     use crate::core::param::{ParamMutability, Parameter};
     use crate::core::types::{SignalType, SignalValue};
+
+    /// `SignalValue::Tensor` used to be serialized as `("none", Null)` and read
+    /// back as `V::None` — silent erasure. It must now be reported, not lost.
+    #[test]
+    fn test_tensor_parameter_is_reported_not_silently_erased() {
+        use crate::core::tensor::Tensor;
+
+        let mut diagram = Diagram::new("tensor");
+        let mut b = SimpleBlock::new("b1", "Blk");
+        b.params_mut().add(Parameter::new_config(
+            "t",
+            SignalValue::Tensor(Tensor::new(crate::core::tensor::TensorDims::new(vec![
+                2, 2,
+            ]))),
+            "",
+        ));
+        diagram.add_block(Box::new(b));
+
+        let err = diagram_to_json(&diagram).unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("tensor parameters are not serializable"),
+            "a tensor must be reported rather than silently dropped, got: {msg}"
+        );
+    }
 
     #[test]
     fn test_json_roundtrip() {

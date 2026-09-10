@@ -28,7 +28,10 @@ pub fn validate_diagram(diagram: &Diagram) -> ValidationResult {
     let mut seen_blocks = HashSet::new();
     for (id, _) in diagram.blocks() {
         if !seen_blocks.insert(id.clone()) {
-            errors.push(SimError::new(ErrorCode::DuplicateBlockId, format!("duplicate block ID: {id}")));
+            errors.push(SimError::new(
+                ErrorCode::DuplicateBlockId,
+                format!("duplicate block ID: {id}"),
+            ));
         }
     }
 
@@ -36,17 +39,26 @@ pub fn validate_diagram(diagram: &Diagram) -> ValidationResult {
     let mut seen_links = HashSet::new();
     for link in diagram.links().iter() {
         if !seen_links.insert(link.id.clone()) {
-            errors.push(SimError::new(ErrorCode::DuplicateLinkId, format!("duplicate link ID: {}", link.id)));
+            errors.push(SimError::new(
+                ErrorCode::DuplicateLinkId,
+                format!("duplicate link ID: {}", link.id),
+            ));
         }
     }
 
     // 3. Check that all link source/destination blocks exist.
     for link in diagram.links().iter() {
         if diagram.get_block(&link.source.0).is_none() {
-            errors.push(SimError::new(ErrorCode::MissingBlock, format!("missing block: {}", link.source.0)));
+            errors.push(SimError::new(
+                ErrorCode::MissingBlock,
+                format!("missing block: {}", link.source.0),
+            ));
         }
         if diagram.get_block(&link.destination.0).is_none() {
-            errors.push(SimError::new(ErrorCode::MissingBlock, format!("missing block: {}", link.destination.0)));
+            errors.push(SimError::new(
+                ErrorCode::MissingBlock,
+                format!("missing block: {}", link.destination.0),
+            ));
         }
     }
 
@@ -55,12 +67,18 @@ pub fn validate_diagram(diagram: &Diagram) -> ValidationResult {
         if let Some(block) = diagram.get_block(&link.source.0)
             && block.ports().get(&link.source.1).is_none()
         {
-            errors.push(SimError::new(ErrorCode::InvalidPortRef, format!("missing port {}.{}", link.source.0, link.source.1)));
+            errors.push(SimError::new(
+                ErrorCode::InvalidPortRef,
+                format!("missing port {}.{}", link.source.0, link.source.1),
+            ));
         }
         if let Some(block) = diagram.get_block(&link.destination.0)
             && block.ports().get(&link.destination.1).is_none()
         {
-            errors.push(SimError::new(ErrorCode::InvalidPortRef, format!("missing port {}.{}", link.destination.0, link.destination.1)));
+            errors.push(SimError::new(
+                ErrorCode::InvalidPortRef,
+                format!("missing port {}.{}", link.destination.0, link.destination.1),
+            ));
         }
     }
 
@@ -70,28 +88,42 @@ pub fn validate_diagram(diagram: &Diagram) -> ValidationResult {
             && let Some(port) = block.ports().get(&link.source.1)
             && port.is_input()
         {
-            errors.push(SimError::new(
-                ErrorCode::PortDirectionMismatch,
-                format!("source port '{}.{}' is an input port, must be output", link.source.0, link.source.1),
-            ).with_context(format!("link={}", link.id)));
+            errors.push(
+                SimError::new(
+                    ErrorCode::PortDirectionMismatch,
+                    format!(
+                        "source port '{}.{}' is an input port, must be output",
+                        link.source.0, link.source.1
+                    ),
+                )
+                .with_context(format!("link={}", link.id)),
+            );
         }
         if let Some(block) = diagram.get_block(&link.destination.0)
             && let Some(port) = block.ports().get(&link.destination.1)
             && port.is_output()
         {
-            errors.push(SimError::new(
-                ErrorCode::PortDirectionMismatch,
-                format!("destination port '{}.{}' is an output port, must be input", link.destination.0, link.destination.1),
-            ).with_context(format!("link={}", link.id)));
+            errors.push(
+                SimError::new(
+                    ErrorCode::PortDirectionMismatch,
+                    format!(
+                        "destination port '{}.{}' is an output port, must be input",
+                        link.destination.0, link.destination.1
+                    ),
+                )
+                .with_context(format!("link={}", link.id)),
+            );
         }
     }
 
     // 5b. Check signal type compatibility between linked ports.
     for link in diagram.links().iter() {
-        let src_type = diagram.get_block(&link.source.0)
+        let src_type = diagram
+            .get_block(&link.source.0)
             .and_then(|b| b.ports().get(&link.source.1))
             .map(|p| p.signal_type);
-        let dst_type = diagram.get_block(&link.destination.0)
+        let dst_type = diagram
+            .get_block(&link.destination.0)
             .and_then(|b| b.ports().get(&link.destination.1))
             .map(|p| p.signal_type);
         if let (Some(src), Some(dst)) = (src_type, dst_type)
@@ -108,15 +140,19 @@ pub fn validate_diagram(diagram: &Diagram) -> ValidationResult {
     // 6. Check for cycles.
     let topo = diagram.links().topological_sort();
     if topo.is_none() {
-        errors.push(SimError::new(ErrorCode::CycleDetected, "cycle detected in diagram topology"));
+        errors.push(SimError::new(
+            ErrorCode::CycleDetected,
+            "cycle detected in diagram topology",
+        ));
     }
 
     // 7. Check for unconnected input ports.
     for (block_id, block) in diagram.blocks() {
         for port in block.ports().inputs() {
-            let connected = diagram.links().iter().any(|l| {
-                l.destination.0 == *block_id && l.destination.1 == port.id
-            });
+            let connected = diagram
+                .links()
+                .iter()
+                .any(|l| l.destination.0 == *block_id && l.destination.1 == port.id);
             if !connected {
                 let io = block.io_declaration();
                 let is_required = io.find_input(&port.id).map(|d| d.required).unwrap_or(true);
@@ -133,9 +169,10 @@ pub fn validate_diagram(diagram: &Diagram) -> ValidationResult {
     // 8. Check for dangling (unconnected) output ports.
     for (block_id, block) in diagram.blocks() {
         for port in block.ports().outputs() {
-            let connected = diagram.links().iter().any(|l| {
-                l.source.0 == *block_id && l.source.1 == port.id
-            });
+            let connected = diagram
+                .links()
+                .iter()
+                .any(|l| l.source.0 == *block_id && l.source.1 == port.id);
             if !connected {
                 warnings.push(format!("dangling output '{}.{}'", block_id, port.id));
             }
@@ -188,7 +225,11 @@ mod tests {
     fn test_valid_diagram() {
         let d = make_diagram();
         let result = validate_diagram(&d);
-        assert!(result.is_valid, "expected no validation errors, got {:?}", result.errors);
+        assert!(
+            result.is_valid,
+            "expected no validation errors, got {:?}",
+            result.errors
+        );
         assert!(result.errors.is_empty());
     }
 
@@ -201,7 +242,12 @@ mod tests {
         d.add_link(Link::new("bad", "nonexistent", "out", "sink", "in"));
         let result = validate_diagram(&d);
         assert!(!result.is_valid);
-        assert!(result.errors.iter().any(|e| e.code == ErrorCode::MissingBlock));
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| e.code == ErrorCode::MissingBlock)
+        );
     }
 
     #[test]
@@ -216,7 +262,12 @@ mod tests {
         d.add_link(Link::new("l1", "src", "in", "sink", "in2"));
         let result = validate_diagram(&d);
         assert!(!result.is_valid);
-        assert!(result.errors.iter().any(|e| e.code == ErrorCode::PortDirectionMismatch));
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| e.code == ErrorCode::PortDirectionMismatch)
+        );
     }
 
     #[test]
@@ -234,7 +285,12 @@ mod tests {
         d.add_link(Link::new("l2", "b", "out", "a", "in"));
         let result = validate_diagram(&d);
         assert!(!result.is_valid);
-        assert!(result.errors.iter().any(|e| e.code == ErrorCode::CycleDetected));
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| e.code == ErrorCode::CycleDetected)
+        );
     }
 
     #[test]
@@ -245,7 +301,12 @@ mod tests {
         d.add_block(Box::new(sink));
         let result = validate_diagram(&d);
         assert!(!result.is_valid);
-        assert!(result.errors.iter().any(|e| e.code == ErrorCode::UnconnectedInput));
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| e.code == ErrorCode::UnconnectedInput)
+        );
     }
 
     #[test]
@@ -280,7 +341,12 @@ mod tests {
         d.add_link(Link::new("l1", "src", "out", "sink", "in"));
         let result = validate_diagram(&d);
         assert!(!result.is_valid);
-        assert!(result.errors.iter().any(|e| e.code == ErrorCode::SignalTypeMismatchLink));
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| e.code == ErrorCode::SignalTypeMismatchLink)
+        );
     }
 
     #[test]
@@ -296,6 +362,11 @@ mod tests {
         d.add_link(Link::new("l1", "src", "out", "sink", "in"));
         let result = validate_diagram(&d);
         assert!(!result.is_valid);
-        assert!(result.errors.iter().any(|e| e.code == ErrorCode::DuplicateLinkId));
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| e.code == ErrorCode::DuplicateLinkId)
+        );
     }
 }

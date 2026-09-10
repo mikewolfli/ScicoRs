@@ -17,7 +17,6 @@ pub use digital_filter::{FIRFilter, IIRFilter, MovingAverage};
 pub use digital_timing::{HazardType, TimingAnalysis};
 pub use discrete_integrator::{DiscreteIntegrator, IntegrationMethod};
 pub use plc_logic::{
-    and_gate, nand_gate, nor_gate, not_gate, or_gate, xor_gate, DFlipFlop, EdgeDetector,
-    RSFlipFlop,
+    DFlipFlop, EdgeDetector, RSFlipFlop, and_gate, nand_gate, nor_gate, not_gate, or_gate, xor_gate,
 };
-pub use sample_hold::{linear_interpolate, resample, SampleHold};
+pub use sample_hold::{SampleHold, linear_interpolate, resample};

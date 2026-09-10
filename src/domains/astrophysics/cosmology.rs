@@ -10,9 +10,7 @@ pub fn scale_factor(redshift: Scalar) -> Scalar {
 /// Hubble parameter H(z) for ΛCDM model.
 pub fn hubble_parameter(redshift: Scalar, h0: Scalar, omega_m: Scalar, omega_l: Scalar) -> Scalar {
     let omega_k = 1.0 - omega_m - omega_l;
-    h0 * ((omega_m * (1.0 + redshift).powi(3)
-        + omega_k * (1.0 + redshift).powi(2)
-        + omega_l)
+    h0 * ((omega_m * (1.0 + redshift).powi(3) + omega_k * (1.0 + redshift).powi(2) + omega_l)
         .sqrt())
 }
 
@@ -36,7 +34,12 @@ pub fn comoving_distance(redshift: Scalar, h0: Scalar, omega_m: Scalar, omega_l:
 }
 
 /// Luminosity distance (Mpc): d_L = (1+z) * d_C.
-pub fn luminosity_distance(redshift: Scalar, h0: Scalar, omega_m: Scalar, omega_l: Scalar) -> Scalar {
+pub fn luminosity_distance(
+    redshift: Scalar,
+    h0: Scalar,
+    omega_m: Scalar,
+    omega_l: Scalar,
+) -> Scalar {
     let dc = comoving_distance(redshift, h0, omega_m, omega_l);
     (1.0 + redshift) * dc
 }
@@ -60,7 +63,9 @@ pub fn universe_age(h0: Scalar, omega_m: Scalar, omega_l: Scalar) -> Scalar {
 
 /// Einstein radius for gravitational lensing (radians).
 pub fn einstein_radius(lens_mass: Scalar, d_l: Scalar, d_s: Scalar, d_ls: Scalar) -> Scalar {
-    if d_l <= 0.0 || d_s <= 0.0 { return 0.0; }
+    if d_l <= 0.0 || d_s <= 0.0 {
+        return 0.0;
+    }
     let gm = 6.67430e-11 * lens_mass;
     let c2 = 299792458.0_f64.powi(2);
     ((4.0 * gm / c2) * (d_ls / (d_l * d_s))).sqrt()
@@ -68,7 +73,9 @@ pub fn einstein_radius(lens_mass: Scalar, d_l: Scalar, d_s: Scalar, d_ls: Scalar
 
 /// NFW dark matter halo density profile.
 pub fn nfw_profile(radius: Scalar, scale_radius: Scalar, rho0: Scalar) -> Scalar {
-    if radius <= 0.0 || scale_radius <= 0.0 { return 0.0; }
+    if radius <= 0.0 || scale_radius <= 0.0 {
+        return 0.0;
+    }
     let x = radius / scale_radius;
     rho0 / (x * (1.0 + x).powi(2))
 }

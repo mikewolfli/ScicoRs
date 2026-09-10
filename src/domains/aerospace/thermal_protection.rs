@@ -111,8 +111,8 @@ impl ThermalProtectionSystem {
             // Inner surface (last node): adiabatic (insulated)
             let last = total_nodes - 1;
             let dx_last = x[last] - x[last - 1];
-            temperatures[last] = prev[last] + dt * k[last] * (prev[last - 1] - prev[last])
-                / (dx_last * dx_last * rho_cp[last]);
+            temperatures[last] = prev[last]
+                + dt * k[last] * (prev[last - 1] - prev[last]) / (dx_last * dx_last * rho_cp[last]);
 
             result.push(temperatures.clone());
         }
@@ -137,10 +137,7 @@ impl ThermalProtectionSystem {
     ///
     /// Sum of mᵢ · cpᵢ across all layers.
     pub fn total_heat_capacity(&self) -> Scalar {
-        self.layers
-            .iter()
-            .map(|l| l.rho * l.thickness * l.cp)
-            .sum()
+        self.layers.iter().map(|l| l.rho * l.thickness * l.cp).sum()
     }
 }
 
@@ -209,7 +206,8 @@ pub fn shock_response_sweep(
             let a_base_curr = -a_curr;
 
             // Newmark-beta predictor-corrector
-            let k_eff = omega_n * omega_n + gamma * omega_n * 2.0 * zeta / (beta * dt)
+            let k_eff = omega_n * omega_n
+                + gamma * omega_n * 2.0 * zeta / (beta * dt)
                 + 1.0 / (beta * dt * dt);
 
             let df = a_base_curr - a_base_prev
@@ -307,9 +305,7 @@ mod tests {
 
     #[test]
     fn test_tps_empty_layers() {
-        let tps = ThermalProtectionSystem {
-            layers: vec![],
-        };
+        let tps = ThermalProtectionSystem { layers: vec![] };
         let response = tps.thermal_response(100_000.0, 300.0, 1.0, 0.01);
         assert_eq!(response.len(), 1);
     }
@@ -335,11 +331,13 @@ mod tests {
     #[test]
     fn test_shock_response_sweep_single_freq() {
         let freqs = [10.0];
-        let base: Vec<(Scalar, Scalar)> = (0..100).map(|i| {
-            let t = i as Scalar * 0.001;
-            let a = if t < 0.01 { 100.0 } else { 0.0 };
-            (t, a)
-        }).collect();
+        let base: Vec<(Scalar, Scalar)> = (0..100)
+            .map(|i| {
+                let t = i as Scalar * 0.001;
+                let a = if t < 0.01 { 100.0 } else { 0.0 };
+                (t, a)
+            })
+            .collect();
         let result = shock_response_sweep(&freqs, &base, 0.05);
         assert_eq!(result.len(), 1);
         assert!(result[0] > 0.0);

@@ -1,13 +1,22 @@
 //! Cross-scale coupling: nano → micro → meter → cosmic.
 
-use std::collections::HashMap;
+use super::bus::FieldData;
 use crate::core::coord::Coord3D;
 use crate::core::types::Scalar;
-use super::bus::FieldData;
+use std::collections::HashMap;
 
 /// Scale level hierarchy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum ScaleLevel { Nano, Micro, Milli, Meter, Kilo, Mega, Giga, Tera }
+pub enum ScaleLevel {
+    Nano,
+    Micro,
+    Milli,
+    Meter,
+    Kilo,
+    Mega,
+    Giga,
+    Tera,
+}
 
 /// Configuration for a cross-scale coupling.
 pub struct CrossScaleCoupling {
@@ -23,29 +32,65 @@ pub struct ScaleBridge {
 }
 
 impl ScaleBridge {
-    pub fn new() -> Self { Self { couplings: Vec::new() } }
-    pub fn add_coupling(&mut self, c: CrossScaleCoupling) { self.couplings.push(c); }
+    pub fn new() -> Self {
+        Self {
+            couplings: Vec::new(),
+        }
+    }
+    pub fn add_coupling(&mut self, c: CrossScaleCoupling) {
+        self.couplings.push(c);
+    }
 
     /// Upscale: fine → coarse (homogenization/averaging).
-    pub fn upscale(&self, fine_data: &FieldData, target_points: &[Coord3D], _scale_ratio: Scalar) -> Result<FieldData, String> {
-        if fine_data.values.is_empty() { return Err("No fine data".to_string()); }
+    pub fn upscale(
+        &self,
+        fine_data: &FieldData,
+        target_points: &[Coord3D],
+        _scale_ratio: Scalar,
+    ) -> Result<FieldData, String> {
+        if fine_data.values.is_empty() {
+            return Err("No fine data".to_string());
+        }
         let avg = fine_data.values.iter().sum::<Scalar>() / fine_data.values.len() as Scalar;
         let coarse_vals: Vec<Scalar> = target_points.iter().map(|_| avg).collect();
-        Ok(FieldData::new(fine_data.field_type, fine_data.quantity, target_points.to_vec(), coarse_vals, fine_data.time))
+        Ok(FieldData::new(
+            fine_data.field_type,
+            fine_data.quantity,
+            target_points.to_vec(),
+            coarse_vals,
+            fine_data.time,
+        ))
     }
 
     /// Downscale: coarse → fine (localization/interpolation).
-    pub fn downscale(&self, coarse_data: &FieldData, target_points: &[Coord3D], _scale_ratio: Scalar) -> Result<FieldData, String> {
-        if coarse_data.points.is_empty() { return Err("No coarse data".to_string()); }
+    pub fn downscale(
+        &self,
+        coarse_data: &FieldData,
+        target_points: &[Coord3D],
+        _scale_ratio: Scalar,
+    ) -> Result<FieldData, String> {
+        if coarse_data.points.is_empty() {
+            return Err("No coarse data".to_string());
+        }
         // Nearest-neighbor interpolation from coarse to fine
         use super::field_mapping::FieldMapper;
         let mapper = FieldMapper::new(super::bus::FieldMappingMethod::NearestNeighbor);
         let fine_vals = mapper.map(&coarse_data.points, &coarse_data.values, target_points)?;
-        Ok(FieldData::new(coarse_data.field_type, coarse_data.quantity, target_points.to_vec(), fine_vals, coarse_data.time))
+        Ok(FieldData::new(
+            coarse_data.field_type,
+            coarse_data.quantity,
+            target_points.to_vec(),
+            fine_vals,
+            coarse_data.time,
+        ))
     }
 }
 
-impl Default for ScaleBridge { fn default() -> Self { Self::new() } }
+impl Default for ScaleBridge {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 /// RVE homogenization (micro → macro).
 pub struct RveHomogenization {
@@ -58,14 +103,34 @@ impl RveHomogenization {
         if self.micro_fields.is_empty() {
             return FieldData::new(
                 crate::coupling::bus::PhysicsField::Structural,
-                crate::coupling::bus::QuantityType::Scalar, vec![], vec![], 0.0);
+                crate::coupling::bus::QuantityType::Scalar,
+                vec![],
+                vec![],
+                0.0,
+            );
         }
         let ref_field = &self.micro_fields[0];
         let n = ref_field.values.len();
         let avg_vals: Vec<Scalar> = if n > 0 {
-            (0..n).map(|i| self.micro_fields.iter().map(|f| f.values[i]).sum::<Scalar>() / self.micro_fields.len() as Scalar).collect()
-        } else { vec![] };
-        FieldData::new(ref_field.field_type, ref_field.quantity, ref_field.points.clone(), avg_vals, ref_field.time)
+            (0..n)
+                .map(|i| {
+                    self.micro_fields
+                        .iter()
+                        .map(|f| f.values[i])
+                        .sum::<Scalar>()
+                        / self.micro_fields.len() as Scalar
+                })
+                .collect()
+        } else {
+            vec![]
+        };
+        FieldData::new(
+            ref_field.field_type,
+            ref_field.quantity,
+            ref_field.points.clone(),
+            avg_vals,
+            ref_field.time,
+        )
     }
 
     pub fn effective_properties(&self) -> HashMap<String, Scalar> {
@@ -95,38 +160,79 @@ mod tests {
     #[test]
     fn test_upscale() {
         let bridge = ScaleBridge::new();
-        let fine = FieldData::new(PhysicsField::Thermal, QuantityType::Scalar,
-            vec![Coord3D::new(0.0,0.0,0.0), Coord3D::new(1.0,0.0,0.0)], vec![100.0, 200.0], 0.0);
-        let result = bridge.upscale(&fine, &[Coord3D::new(0.5,0.0,0.0)], 10.0).unwrap();
+        let fine = FieldData::new(
+            PhysicsField::Thermal,
+            QuantityType::Scalar,
+            vec![Coord3D::new(0.0, 0.0, 0.0), Coord3D::new(1.0, 0.0, 0.0)],
+            vec![100.0, 200.0],
+            0.0,
+        );
+        let result = bridge
+            .upscale(&fine, &[Coord3D::new(0.5, 0.0, 0.0)], 10.0)
+            .unwrap();
         assert!((result.values[0] - 150.0).abs() < 1e-10);
     }
     #[test]
     fn test_downscale() {
         let bridge = ScaleBridge::new();
-        let coarse = FieldData::new(PhysicsField::Thermal, QuantityType::Scalar,
-            vec![Coord3D::new(0.0,0.0,0.0)], vec![100.0], 0.0);
-        let result = bridge.downscale(&coarse, &[Coord3D::new(0.5,0.0,0.0)], 0.1).unwrap();
+        let coarse = FieldData::new(
+            PhysicsField::Thermal,
+            QuantityType::Scalar,
+            vec![Coord3D::new(0.0, 0.0, 0.0)],
+            vec![100.0],
+            0.0,
+        );
+        let result = bridge
+            .downscale(&coarse, &[Coord3D::new(0.5, 0.0, 0.0)], 0.1)
+            .unwrap();
         assert!((result.values[0] - 100.0).abs() < 1e-10);
     }
     #[test]
     fn test_rve_volume_average() {
-        let f1 = FieldData::new(PhysicsField::Structural, QuantityType::Scalar, vec![Coord3D::new(0.0,0.0,0.0)], vec![10.0], 0.0);
-        let f2 = FieldData::new(PhysicsField::Structural, QuantityType::Scalar, vec![Coord3D::new(0.0,0.0,0.0)], vec![20.0], 0.0);
-        let rve = RveHomogenization { rve_size: 1e-6, micro_fields: vec![f1, f2] };
+        let f1 = FieldData::new(
+            PhysicsField::Structural,
+            QuantityType::Scalar,
+            vec![Coord3D::new(0.0, 0.0, 0.0)],
+            vec![10.0],
+            0.0,
+        );
+        let f2 = FieldData::new(
+            PhysicsField::Structural,
+            QuantityType::Scalar,
+            vec![Coord3D::new(0.0, 0.0, 0.0)],
+            vec![20.0],
+            0.0,
+        );
+        let rve = RveHomogenization {
+            rve_size: 1e-6,
+            micro_fields: vec![f1, f2],
+        };
         let avg = rve.volume_average();
         assert!((avg.values[0] - 15.0).abs() < 1e-10);
     }
     #[test]
     fn test_effective_properties() {
-        let f1 = FieldData::new(PhysicsField::Structural, QuantityType::Tensor6, vec![Coord3D::new(0.0,0.0,0.0)], vec![1e9], 0.0);
-        let rve = RveHomogenization { rve_size: 1e-6, micro_fields: vec![f1] };
+        let f1 = FieldData::new(
+            PhysicsField::Structural,
+            QuantityType::Tensor6,
+            vec![Coord3D::new(0.0, 0.0, 0.0)],
+            vec![1e9],
+            0.0,
+        );
+        let rve = RveHomogenization {
+            rve_size: 1e-6,
+            micro_fields: vec![f1],
+        };
         let props = rve.effective_properties();
         assert!(props.contains_key("E_effective"));
         assert!(props.contains_key("rve_size"));
     }
     #[test]
     fn test_empty_rve() {
-        let rve = RveHomogenization { rve_size: 1.0, micro_fields: vec![] };
+        let rve = RveHomogenization {
+            rve_size: 1.0,
+            micro_fields: vec![],
+        };
         let avg = rve.volume_average();
         assert!(avg.values.is_empty());
     }

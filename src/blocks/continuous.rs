@@ -5,7 +5,7 @@
 
 use crate::core::block::{Block, BlockId};
 use crate::core::error::SimError;
-use crate::core::param::ParameterSet;
+use crate::core::param::{Parameter, ParameterSet, all_finite};
 use crate::core::port::{Port, PortSet};
 use crate::core::signal::Signal;
 use crate::core::state::{ContinuousStateVar, StateDeclaration};
@@ -143,6 +143,46 @@ impl Block for Integrator {
     }
     fn clone_block(&self) -> Box<dyn Block> {
         Box::new(self.clone())
+    }
+    fn configuration(&self) -> Vec<Parameter> {
+        vec![
+            Parameter::new_tunable(
+                "initial",
+                SignalValue::Scalar(self.initial),
+                "block configuration",
+            ),
+            Parameter::new_tunable("max", SignalValue::Scalar(self.max), "block configuration"),
+            Parameter::new_tunable("min", SignalValue::Scalar(self.min), "block configuration"),
+        ]
+    }
+    fn apply_configuration(&mut self, params: &[Parameter]) -> usize {
+        let mut applied = 0;
+        for p in params {
+            if let SignalValue::Scalar(v) = p.value {
+                // A non-finite value from a hand-edited file is rejected
+                // rather than stored: it would propagate into every
+                // downstream computation as NaN.
+                if !v.is_finite() {
+                    continue;
+                }
+                match p.name.as_str() {
+                    "initial" => {
+                        self.initial = v;
+                        applied += 1;
+                    }
+                    "max" => {
+                        self.max = v;
+                        applied += 1;
+                    }
+                    "min" => {
+                        self.min = v;
+                        applied += 1;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        applied
     }
 }
 
@@ -339,6 +379,52 @@ impl Block for PIDController {
     fn clone_block(&self) -> Box<dyn Block> {
         Box::new(self.clone())
     }
+    fn configuration(&self) -> Vec<Parameter> {
+        vec![
+            Parameter::new_tunable("kd", SignalValue::Scalar(self.kd), "block configuration"),
+            Parameter::new_tunable("ki", SignalValue::Scalar(self.ki), "block configuration"),
+            Parameter::new_tunable("kp", SignalValue::Scalar(self.kp), "block configuration"),
+            Parameter::new_tunable("max", SignalValue::Scalar(self.max), "block configuration"),
+            Parameter::new_tunable("min", SignalValue::Scalar(self.min), "block configuration"),
+        ]
+    }
+    fn apply_configuration(&mut self, params: &[Parameter]) -> usize {
+        let mut applied = 0;
+        for p in params {
+            if let SignalValue::Scalar(v) = p.value {
+                // A non-finite value from a hand-edited file is rejected
+                // rather than stored: it would propagate into every
+                // downstream computation as NaN.
+                if !v.is_finite() {
+                    continue;
+                }
+                match p.name.as_str() {
+                    "kd" => {
+                        self.kd = v;
+                        applied += 1;
+                    }
+                    "ki" => {
+                        self.ki = v;
+                        applied += 1;
+                    }
+                    "kp" => {
+                        self.kp = v;
+                        applied += 1;
+                    }
+                    "max" => {
+                        self.max = v;
+                        applied += 1;
+                    }
+                    "min" => {
+                        self.min = v;
+                        applied += 1;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        applied
+    }
 }
 
 // ──────────────────────────────────────────────
@@ -512,6 +598,46 @@ impl Block for TransferFunction {
     fn clone_block(&self) -> Box<dyn Block> {
         Box::new(self.clone())
     }
+
+    /// Numerator and denominator are coefficient vectors, so they serialize as
+    /// `SignalValue::Vector` entries rather than scalars.
+    ///
+    /// A hand-edited file must not be able to inject a non-finite coefficient:
+    /// one `NaN` in `den` would poison every derivative from then on, so each
+    /// vector is rejected element-wise unless all entries are finite, and `den`
+    /// must additionally stay non-empty (the transfer function is undefined
+    /// without it).
+    fn configuration(&self) -> Vec<Parameter> {
+        vec![
+            Parameter::new_config(
+                "num",
+                SignalValue::Vector(self.num.clone()),
+                "transfer-function numerator",
+            ),
+            Parameter::new_config(
+                "den",
+                SignalValue::Vector(self.den.clone()),
+                "transfer-function denominator",
+            ),
+        ]
+    }
+    fn apply_configuration(&mut self, params: &[Parameter]) -> usize {
+        let mut applied = 0;
+        for p in params {
+            match (p.name.as_str(), &p.value) {
+                ("num", SignalValue::Vector(v)) if all_finite(v) => {
+                    self.num = v.clone();
+                    applied += 1;
+                }
+                ("den", SignalValue::Vector(v)) if all_finite(v) && !v.is_empty() => {
+                    self.den = v.clone();
+                    applied += 1;
+                }
+                _ => {}
+            }
+        }
+        applied
+    }
 }
 
 // ──────────────────────────────────────────────
@@ -662,6 +788,51 @@ impl Block for StateSpaceSystem {
     }
     fn clone_block(&self) -> Box<dyn Block> {
         Box::new(self.clone())
+    }
+
+    /// The system matrices are serialized as a matrix plus two vectors. Every
+    /// incoming value is validated before it is stored: a non-finite entry in
+    /// `a`, `b`, `c` or `d` would make every subsequent derivative `NaN`.
+    ///
+    /// `a` carries its real shape rather than a hard-coded one, and the shape is
+    /// re-derived on load so a resized state matrix round-trips correctly.
+    fn configuration(&self) -> Vec<Parameter> {
+        let rows = self.a.len();
+        let cols = self.a.first().map_or(0, |row| row.len());
+        let flat: Vec<Scalar> = self.a.iter().flatten().copied().collect();
+        vec![
+            Parameter::new_config("a", SignalValue::Matrix(rows, cols, flat), "state matrix"),
+            Parameter::new_config("b", SignalValue::Vector(self.b.clone()), "input matrix"),
+            Parameter::new_config("c", SignalValue::Vector(self.c.clone()), "output matrix"),
+            Parameter::new_config("d", SignalValue::Scalar(self.d), "feedthrough"),
+        ]
+    }
+    fn apply_configuration(&mut self, params: &[Parameter]) -> usize {
+        let mut applied = 0;
+        for p in params {
+            match (p.name.as_str(), &p.value) {
+                ("a", SignalValue::Matrix(rows, cols, data))
+                    if *rows > 0 && *cols > 0 && data.len() == rows * cols && all_finite(data) =>
+                {
+                    self.a = data.chunks(*cols).map(|r| r.to_vec()).collect();
+                    applied += 1;
+                }
+                ("b", SignalValue::Vector(v)) if all_finite(v) => {
+                    self.b = v.clone();
+                    applied += 1;
+                }
+                ("c", SignalValue::Vector(v)) if all_finite(v) => {
+                    self.c = v.clone();
+                    applied += 1;
+                }
+                ("d", SignalValue::Scalar(v)) if v.is_finite() => {
+                    self.d = *v;
+                    applied += 1;
+                }
+                _ => {}
+            }
+        }
+        applied
     }
 }
 

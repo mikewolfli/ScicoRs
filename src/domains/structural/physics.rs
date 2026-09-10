@@ -69,10 +69,10 @@ impl MaterialProperties {
 /// Standard structural steel (A992 / S355).
 pub fn steel_structural() -> MaterialProperties {
     MaterialProperties {
-        young_modulus: 200.0e9,    // 200 GPa
+        young_modulus: 200.0e9, // 200 GPa
         poisson_ratio: 0.30,
-        density: 7850.0,           // kg/m³
-        yield_strength: 345.0e6,   // 345 MPa
+        density: 7850.0,            // kg/m³
+        yield_strength: 345.0e6,    // 345 MPa
         ultimate_strength: 450.0e6, // 450 MPa
         thermal_expansion: 12.0e-6, // 12 μm/m·K
     }
@@ -81,10 +81,10 @@ pub fn steel_structural() -> MaterialProperties {
 /// Aluminum alloy 6061-T6.
 pub fn aluminum_6061() -> MaterialProperties {
     MaterialProperties {
-        young_modulus: 68.9e9,     // 68.9 GPa
+        young_modulus: 68.9e9, // 68.9 GPa
         poisson_ratio: 0.33,
-        density: 2700.0,           // kg/m³
-        yield_strength: 276.0e6,   // 276 MPa
+        density: 2700.0,            // kg/m³
+        yield_strength: 276.0e6,    // 276 MPa
         ultimate_strength: 310.0e6, // 310 MPa
         thermal_expansion: 23.6e-6, // 23.6 μm/m·K
     }
@@ -93,11 +93,11 @@ pub fn aluminum_6061() -> MaterialProperties {
 /// Normal-weight concrete (30 MPa compressive strength).
 pub fn concrete_30mpa() -> MaterialProperties {
     MaterialProperties {
-        young_modulus: 25.0e9,     // 25 GPa (ACI 318 approximation)
+        young_modulus: 25.0e9, // 25 GPa (ACI 318 approximation)
         poisson_ratio: 0.20,
-        density: 2400.0,           // kg/m³
-        yield_strength: 30.0e6,    // 30 MPa compressive
-        ultimate_strength: 3.0e6,  // ~3 MPa tensile (≈ 0.1 f'c)
+        density: 2400.0,          // kg/m³
+        yield_strength: 30.0e6,   // 30 MPa compressive
+        ultimate_strength: 3.0e6, // ~3 MPa tensile (≈ 0.1 f'c)
         thermal_expansion: 10.0e-6,
     }
 }
@@ -105,10 +105,10 @@ pub fn concrete_30mpa() -> MaterialProperties {
 /// Titanium alloy Ti-6Al-4V (Grade 5).
 pub fn titanium_ti6al4v() -> MaterialProperties {
     MaterialProperties {
-        young_modulus: 110.0e9,    // 110 GPa
+        young_modulus: 110.0e9, // 110 GPa
         poisson_ratio: 0.31,
-        density: 4430.0,           // kg/m³
-        yield_strength: 830.0e6,   // 830 MPa
+        density: 4430.0,            // kg/m³
+        yield_strength: 830.0e6,    // 830 MPa
         ultimate_strength: 900.0e6, // 900 MPa
         thermal_expansion: 8.6e-6,
     }

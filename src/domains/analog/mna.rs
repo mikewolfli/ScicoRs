@@ -438,13 +438,41 @@ mod tests {
         assert!((sol.node_voltages[1] - 6.0).abs() < 1e-10);
     }
 
+    /// A singular system must be *detected and reported*, not silently accepted.
+    ///
+    /// The previous version wrapped the body in `if let Ok(sol)`, so when
+    /// `solve()` returned `Err` (as it does for an unconnected node) the test
+    /// executed **zero assertions** and passed even if `solve` were deleted.
     #[test]
     fn test_mna_singular_detection() {
         let mna = MnaMatrix::new(2, 0);
-        // Unconnected nodes
+        // Unconnected nodes: the conductance matrix is singular.
         let result = mna.solve();
-        if let Ok(sol) = result {
-            assert!((sol.node_voltages[0]).abs() < 1e-10);
+        match result {
+            Ok(sol) => {
+                // If the solver claims success, the returned solution must at
+                // least be finite and satisfy the trivial solution.
+                for v in &sol.node_voltages {
+                    assert!(
+                        v.is_finite(),
+                        "a solved node voltage must be finite, got {v}"
+                    );
+                }
+                assert!(
+                    sol.node_voltages.iter().all(|v| v.abs() < 1e-10),
+                    "an unconnected system has the trivial solution, got {:?}",
+                    sol.node_voltages
+                );
+            }
+            Err(e) => {
+                // Reporting singularity is the expected, correct outcome.
+                let msg = format!("{e:?}");
+                assert!(
+                    msg.to_lowercase().contains("singular")
+                        || msg.to_lowercase().contains("numerical"),
+                    "a singular system must be reported as such, got: {msg}"
+                );
+            }
         }
     }
 }

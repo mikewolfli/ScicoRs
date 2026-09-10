@@ -22,7 +22,12 @@ pub struct Signal {
 
 impl Signal {
     pub fn new(signal_type: SignalType, value: SignalValue, time: Time) -> Self {
-        Self { signal_type, value, time, metadata: None }
+        Self {
+            signal_type,
+            value,
+            time,
+            metadata: None,
+        }
     }
 
     pub fn with_metadata(mut self, metadata: Arc<dyn Any + Send + Sync>) -> Self {

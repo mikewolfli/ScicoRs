@@ -63,13 +63,7 @@ pub fn ideal_gas_temperature(n: Scalar, p: Scalar, v: Scalar) -> Scalar {
 
 /// Van der Waals equation pressure correction.
 /// P = (nRT)/(V - nb) - a(n/V)²
-pub fn van_der_waals_pressure(
-    n: Scalar,
-    v: Scalar,
-    t: Scalar,
-    a: Scalar,
-    b: Scalar,
-) -> Scalar {
+pub fn van_der_waals_pressure(n: Scalar, v: Scalar, t: Scalar, a: Scalar, b: Scalar) -> Scalar {
     if v <= 0.0 || t <= 0.0 || (v - n * b) <= 0.0 {
         return 0.0;
     }
@@ -103,8 +97,7 @@ pub fn water_density(temp: Scalar) -> Scalar {
             - 1.120083e-6 * tc_clamped.powi(4)
             + 6.536332e-9 * tc_clamped.powi(5)
     } else {
-        999.842594 + 6.793952e-2 * tc - 9.095290e-3 * tc.powi(2)
-            + 1.001685e-4 * tc.powi(3)
+        999.842594 + 6.793952e-2 * tc - 9.095290e-3 * tc.powi(2) + 1.001685e-4 * tc.powi(3)
             - 1.120083e-6 * tc.powi(4)
             + 6.536332e-9 * tc.powi(5)
     }
@@ -131,7 +124,12 @@ pub fn kelvin_to_celsius(k: Scalar) -> Scalar {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::let_and_return, clippy::manual_range_contains, clippy::single_match, clippy::unnecessary_unwrap)]
+    #![allow(
+        clippy::let_and_return,
+        clippy::manual_range_contains,
+        clippy::single_match,
+        clippy::unnecessary_unwrap
+    )]
     use super::*;
 
     #[test]

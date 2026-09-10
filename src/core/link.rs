@@ -28,7 +28,13 @@ pub struct Link {
 }
 
 impl Link {
-    pub fn new(id: &str, source_block: &str, source_port: &str, dest_block: &str, dest_port: &str) -> Self {
+    pub fn new(
+        id: &str,
+        source_block: &str,
+        source_port: &str,
+        dest_block: &str,
+        dest_port: &str,
+    ) -> Self {
         Self {
             id: id.to_string(),
             source: (source_block.to_string(), source_port.to_string()),
@@ -84,11 +90,17 @@ impl LinkSet {
     }
 
     pub fn connections_to(&self, block: &str, port: &str) -> Vec<&Link> {
-        self.links.iter().filter(|l| l.destination == (block.to_string(), port.to_string())).collect()
+        self.links
+            .iter()
+            .filter(|l| l.destination == (block.to_string(), port.to_string()))
+            .collect()
     }
 
     pub fn connections_from(&self, block: &str, port: &str) -> Vec<&Link> {
-        self.links.iter().filter(|l| l.source == (block.to_string(), port.to_string())).collect()
+        self.links
+            .iter()
+            .filter(|l| l.source == (block.to_string(), port.to_string()))
+            .collect()
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &Link> {

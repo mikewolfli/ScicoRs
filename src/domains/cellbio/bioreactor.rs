@@ -100,12 +100,16 @@ impl Bioreactor {
         let result = self.population.update(dt, nutrient, o2, ph, temp);
         self.total_nutrient_consumed += result.total_nutrient_consumed;
         self.total_biomass += self.population.cells.len() as Scalar
-            * self.population.cells.first().map(|c| c.mass).unwrap_or(1e-12);
+            * self
+                .population
+                .cells
+                .first()
+                .map(|c| c.mass)
+                .unwrap_or(1e-12);
 
         // Update medium concentrations based on consumption
         let glucose_conc = self.media.get_concentration("Glucose").unwrap_or(0.0);
-        let new_glucose = (glucose_conc * self.working_volume
-            - result.total_nutrient_consumed)
+        let new_glucose = (glucose_conc * self.working_volume - result.total_nutrient_consumed)
             / self.working_volume;
         self.media
             .set_concentration("Glucose", new_glucose.max(0.0))
@@ -157,18 +161,17 @@ impl Bioreactor {
         // Add nutrients with feed
         let glucose = self.media.get_concentration("Glucose").unwrap_or(0.0);
         let added_glucose = self.feed_concentration * feed_volume;
-        let new_glucose = (glucose * (self.working_volume - feed_volume) + added_glucose)
-            / self.working_volume;
-        self.media
-            .set_concentration("Glucose", new_glucose)
-            .ok();
+        let new_glucose =
+            (glucose * (self.working_volume - feed_volume) + added_glucose) / self.working_volume;
+        self.media.set_concentration("Glucose", new_glucose).ok();
     }
 
     /// Continuous culture operation.
     fn continuous_operation(&mut self, dt: Scalar, dilution_rate: Scalar) {
         let flow_rate = dilution_rate * self.working_volume * dt;
         // Remove volume and cells
-        let cells_to_remove = (self.population.cells.len() as Scalar * dilution_rate * dt).round() as usize;
+        let cells_to_remove =
+            (self.population.cells.len() as Scalar * dilution_rate * dt).round() as usize;
         let remove_count = cells_to_remove.min(self.population.cells.len() / 2);
         for _ in 0..remove_count {
             self.population.cells.pop();
@@ -177,10 +180,9 @@ impl Bioreactor {
         // Add fresh media
         let fresh_glucose = self.feed_concentration * flow_rate;
         let current_glucose = self.media.get_concentration("Glucose").unwrap_or(0.0);
-        let new_glucose = (current_glucose * (self.working_volume) + fresh_glucose) / self.working_volume.max(1e-15);
-        self.media
-            .set_concentration("Glucose", new_glucose)
-            .ok();
+        let new_glucose = (current_glucose * (self.working_volume) + fresh_glucose)
+            / self.working_volume.max(1e-15);
+        self.media.set_concentration("Glucose", new_glucose).ok();
     }
 
     /// Perfusion operation.
@@ -191,9 +193,7 @@ impl Bioreactor {
         let retained = current_glucose * (self.working_volume - exchange_volume);
         let added = self.feed_concentration * exchange_volume;
         let new_glucose = (retained + added) / self.working_volume;
-        self.media
-            .set_concentration("Glucose", new_glucose)
-            .ok();
+        self.media.set_concentration("Glucose", new_glucose).ok();
     }
 
     /// Simple proportional pH control.
@@ -266,12 +266,7 @@ mod tests {
 
     #[test]
     fn test_fed_batch_step() {
-        let mut reactor = Bioreactor::new(
-            BioreactorMode::FedBatch {
-                feed_rate: 1e-8,
-            },
-            1e-4,
-        );
+        let mut reactor = Bioreactor::new(BioreactorMode::FedBatch { feed_rate: 1e-8 }, 1e-4);
         let mut cells = CellPopulation::new();
         reactor.inoculate(&mut cells, 1e5);
         reactor.step(3600.0).unwrap();

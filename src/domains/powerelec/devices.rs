@@ -100,35 +100,72 @@ mod tests {
 
     #[test]
     fn test_diode_forward_voltage() {
-        let d = PowerDiode { vf: 0.8, r_on: 0.01, trr: 50e-9, v_br: 600.0, i_max: 10.0 };
+        let d = PowerDiode {
+            vf: 0.8,
+            r_on: 0.01,
+            trr: 50e-9,
+            v_br: 600.0,
+            i_max: 10.0,
+        };
         let v = d.forward_voltage(5.0);
         assert!((v - 0.85).abs() < 1e-10);
     }
 
     #[test]
     fn test_diode_conduction_loss() {
-        let d = PowerDiode { vf: 0.8, r_on: 0.01, trr: 50e-9, v_br: 600.0, i_max: 10.0 };
+        let d = PowerDiode {
+            vf: 0.8,
+            r_on: 0.01,
+            trr: 50e-9,
+            v_br: 600.0,
+            i_max: 10.0,
+        };
         let p = d.conduction_loss(5.0, 0.5);
         assert!((p - 0.85 * 5.0 * 0.5).abs() < 1e-10);
     }
 
     #[test]
     fn test_mosfet_conduction_loss() {
-        let m = PowerMosfet { r_ds_on: 0.01, v_th: 3.0, q_g: 20e-9, c_iss: 1e-9, c_rss: 10e-12, v_dss: 100.0, i_d_max: 50.0, t_rf: 100e-9 };
+        let m = PowerMosfet {
+            r_ds_on: 0.01,
+            v_th: 3.0,
+            q_g: 20e-9,
+            c_iss: 1e-9,
+            c_rss: 10e-12,
+            v_dss: 100.0,
+            i_d_max: 50.0,
+            t_rf: 100e-9,
+        };
         let p = m.conduction_loss(10.0, 0.01, 0.5);
         assert!((p - 0.5).abs() < 0.01);
     }
 
     #[test]
     fn test_mosfet_temp_dep() {
-        let m = PowerMosfet { r_ds_on: 0.01, v_th: 3.0, q_g: 20e-9, c_iss: 1e-9, c_rss: 10e-12, v_dss: 100.0, i_d_max: 50.0, t_rf: 100e-9 };
+        let m = PowerMosfet {
+            r_ds_on: 0.01,
+            v_th: 3.0,
+            q_g: 20e-9,
+            c_iss: 1e-9,
+            c_rss: 10e-12,
+            v_dss: 100.0,
+            i_d_max: 50.0,
+            t_rf: 100e-9,
+        };
         let r_hot = m.rds_on_temp(125.0);
         assert!(r_hot > 0.01);
     }
 
     #[test]
     fn test_igbt_total_loss() {
-        let igbt = Igbt { v_ce_sat: 1.8, r_on: 0.005, e_on: 0.002, e_off: 0.001, v_ces: 1200.0, i_c_max: 100.0 };
+        let igbt = Igbt {
+            v_ce_sat: 1.8,
+            r_on: 0.005,
+            e_on: 0.002,
+            e_off: 0.001,
+            v_ces: 1200.0,
+            i_c_max: 100.0,
+        };
         let p = igbt.total_loss(50.0, 600.0, 10e3, 0.5);
         assert!(p > 0.0);
     }

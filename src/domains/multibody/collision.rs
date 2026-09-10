@@ -219,11 +219,7 @@ pub fn friction_force(
         return 0.0;
     }
     let v_abs = relative_velocity.abs();
-    let mu = if v_abs < 1e-8 {
-        mu_static
-    } else {
-        mu_kinetic
-    };
+    let mu = if v_abs < 1e-8 { mu_static } else { mu_kinetic };
     mu * normal_force * relative_velocity.signum()
 }
 

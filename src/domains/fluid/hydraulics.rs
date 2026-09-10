@@ -86,7 +86,11 @@ pub fn weir_flow(cd: Scalar, crest_length: Scalar, head: Scalar) -> Scalar {
 /// * `velocity_change` - Sudden change in flow velocity ΔU (m/s)
 ///
 /// Returns the pressure rise ΔP (Pa).
-pub fn water_hammer_pressure(density: Scalar, wave_speed: Scalar, velocity_change: Scalar) -> Scalar {
+pub fn water_hammer_pressure(
+    density: Scalar,
+    wave_speed: Scalar,
+    velocity_change: Scalar,
+) -> Scalar {
     if density <= 0.0 || wave_speed <= 0.0 {
         return 0.0;
     }

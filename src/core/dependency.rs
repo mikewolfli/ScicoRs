@@ -63,12 +63,18 @@ impl DependencySet {
 
     /// Find dependencies targeting a specific consumer port.
     pub fn for_consumer_port(&self, port: &str) -> Vec<&DependencyDecl> {
-        self.dependencies.iter().filter(|d| d.consumer_port == port).collect()
+        self.dependencies
+            .iter()
+            .filter(|d| d.consumer_port == port)
+            .collect()
     }
 
     /// Find dependencies from a specific provider.
     pub fn from_provider(&self, block: &str) -> Vec<&DependencyDecl> {
-        self.dependencies.iter().filter(|d| d.provider_block == block).collect()
+        self.dependencies
+            .iter()
+            .filter(|d| d.provider_block == block)
+            .collect()
     }
 }
 
@@ -79,8 +85,7 @@ mod tests {
     #[test]
     fn test_dependency_decl() {
         let mut ds = DependencySet::new();
-        ds.add(DependencyDecl::new("sensor", "out", "in")
-            .with_description("sensor reading"));
+        ds.add(DependencyDecl::new("sensor", "out", "in").with_description("sensor reading"));
         ds.add(DependencyDecl::new("controller", "cmd", "setpoint"));
         assert_eq!(ds.len(), 2);
         assert_eq!(ds.for_consumer_port("in").len(), 1);

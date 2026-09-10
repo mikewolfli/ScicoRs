@@ -20,7 +20,11 @@ pub struct AberrationEstimator {
 
 impl AberrationEstimator {
     pub fn new(spherical: Scalar, coma: Scalar, astigmatism: Scalar) -> Self {
-        Self { spherical, coma, astigmatism }
+        Self {
+            spherical,
+            coma,
+            astigmatism,
+        }
     }
 
     /// Estimate RMS wavefront error for given field angle.
@@ -32,7 +36,12 @@ impl AberrationEstimator {
     }
 
     /// Strehl ratio approximation: S ≈ exp(-(2π·σ/λ)²).
-    pub fn strehl_ratio(&self, field_angle: Scalar, aperture_radius: Scalar, lambda: Scalar) -> Scalar {
+    pub fn strehl_ratio(
+        &self,
+        field_angle: Scalar,
+        aperture_radius: Scalar,
+        lambda: Scalar,
+    ) -> Scalar {
         if lambda <= 0.0 {
             return 0.0;
         }
@@ -45,7 +54,11 @@ impl AberrationEstimator {
 ///
 /// For a circular aperture, MTF(f) = 2/π·(acos(f/f_c) - f/f_c·√(1-(f/f_c)²))
 /// where f_c = D/(λ·f) is the cutoff frequency.
-pub fn modulation_transfer_function(spatial_freq: Scalar, aperture: Scalar, lambda: Scalar) -> Scalar {
+pub fn modulation_transfer_function(
+    spatial_freq: Scalar,
+    aperture: Scalar,
+    lambda: Scalar,
+) -> Scalar {
     if lambda <= 0.0 || aperture <= 0.0 {
         return 0.0;
     }

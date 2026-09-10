@@ -4,8 +4,8 @@
 //! building and simulating chemical process flowsheets,
 //! including heat exchanger models.
 
-use std::collections::HashMap;
 use crate::core::types::Scalar;
+use std::collections::HashMap;
 
 // ──────────────────────────────────────────────
 // Process Unit
@@ -90,11 +90,8 @@ impl ProcessFlowsheet {
 
     /// Connect two units with a stream.
     pub fn add_stream(&mut self, from: &str, to: &str, name: &str) {
-        self.streams.push((
-            from.to_string(),
-            to.to_string(),
-            name.to_string(),
-        ));
+        self.streams
+            .push((from.to_string(), to.to_string(), name.to_string()));
     }
 
     /// Find a unit by ID and return its index.
@@ -318,9 +315,7 @@ pub fn heat_exchanger_ntu(
                 (1.0 - (-ntu * (1.0 - cr)).exp()) / (1.0 - cr * (-ntu * (1.0 - cr)).exp())
             }
         }
-        "cocurrent" | "parallel" => {
-            (1.0 - (-ntu * (1.0 + cr)).exp()) / (1.0 + cr)
-        }
+        "cocurrent" | "parallel" => (1.0 - (-ntu * (1.0 + cr)).exp()) / (1.0 + cr),
         "crossflow" => {
             // Approximation for both fluids unmixed
             1.0 - ((-ntu.powf(0.22) / cr) * (1.0 - (-cr * ntu.powf(0.78)).exp() - 1.0)).exp()
@@ -394,7 +389,10 @@ mod tests {
         let order = fs.topological_order().unwrap();
         assert_eq!(order.len(), 3);
         // Feed should come before R1 which comes before S1
-        let feed_pos = order.iter().position(|&i| fs.units[i].id == "Feed").unwrap();
+        let feed_pos = order
+            .iter()
+            .position(|&i| fs.units[i].id == "Feed")
+            .unwrap();
         let r1_pos = order.iter().position(|&i| fs.units[i].id == "R1").unwrap();
         let s1_pos = order.iter().position(|&i| fs.units[i].id == "S1").unwrap();
         assert!(feed_pos < r1_pos);
@@ -445,7 +443,8 @@ mod tests {
 
     #[test]
     fn test_heat_exchanger_ntu_zero_c() {
-        let (t_hot, t_cold) = heat_exchanger_ntu(0.0, 2000.0, 500.0, 400.0, 300.0, "countercurrent");
+        let (t_hot, t_cold) =
+            heat_exchanger_ntu(0.0, 2000.0, 500.0, 400.0, 300.0, "countercurrent");
         assert_eq!(t_hot, 400.0);
         assert_eq!(t_cold, 300.0);
     }

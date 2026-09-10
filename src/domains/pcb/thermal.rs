@@ -12,7 +12,12 @@ pub fn junction_temperature(ambient_temp: Scalar, theta_ja: Scalar, power: Scala
 }
 
 /// PCB trace temperature rise (IPC-2151 simplified).
-pub fn pcb_trace_temperature_rise(current: Scalar, width: Scalar, _thickness: Scalar, ambient_temp: Scalar) -> Scalar {
+pub fn pcb_trace_temperature_rise(
+    current: Scalar,
+    width: Scalar,
+    _thickness: Scalar,
+    ambient_temp: Scalar,
+) -> Scalar {
     let r_per_mm = 1.72e-8 / (width * 35e-6); // 1 oz copper
     let power_per_mm = current * current * r_per_mm;
     let temp_rise = 30.0 * f64::powf(power_per_mm * 1000.0, 0.5);
@@ -29,7 +34,11 @@ pub struct ThermalNetwork {
 
 impl ThermalNetwork {
     pub fn new(theta_jc: Scalar, theta_cb: Scalar, theta_ba: Scalar) -> Self {
-        Self { theta_jc, theta_cb, theta_ba }
+        Self {
+            theta_jc,
+            theta_cb,
+            theta_ba,
+        }
     }
 
     pub fn total_theta_ja(&self) -> Scalar {
@@ -58,48 +67,124 @@ pub struct PcbThermalBlock {
 impl PcbThermalBlock {
     pub fn new(id: &str, n_cells: usize) -> Self {
         let mut ports = PortSet::new();
-        ports.add(Port::new("power_in", PortDirection::Input, SignalType::Continuous).with_description("Input power (W)"));
-        ports.add(Port::new("temp_out", PortDirection::Output, SignalType::Continuous).with_description("Output temperature (°C)"));
+        ports.add(
+            Port::new("power_in", PortDirection::Input, SignalType::Continuous)
+                .with_description("Input power (W)"),
+        );
+        ports.add(
+            Port::new("temp_out", PortDirection::Output, SignalType::Continuous)
+                .with_description("Output temperature (°C)"),
+        );
         let mut params = ParameterSet::new();
-        params.add(Parameter::new_static("n_cells", SignalValue::Scalar(n_cells as Scalar), "Number of cells"));
-        params.add(Parameter::new_config("theta_ja", SignalValue::Scalar(20.0), "Junction-to-ambient thermal resistance"));
-        params.add(Parameter::new_config("ambient_temp", SignalValue::Scalar(25.0), "Ambient temperature (°C)"));
-        Self { id: id.to_string(), ports, params, status: ComponentStatus::Inactive, time: 0.0, n_cells }
+        params.add(Parameter::new_static(
+            "n_cells",
+            SignalValue::Scalar(n_cells as Scalar),
+            "Number of cells",
+        ));
+        params.add(Parameter::new_config(
+            "theta_ja",
+            SignalValue::Scalar(20.0),
+            "Junction-to-ambient thermal resistance",
+        ));
+        params.add(Parameter::new_config(
+            "ambient_temp",
+            SignalValue::Scalar(25.0),
+            "Ambient temperature (°C)",
+        ));
+        Self {
+            id: id.to_string(),
+            ports,
+            params,
+            status: ComponentStatus::Inactive,
+            time: 0.0,
+            n_cells,
+        }
     }
 }
 
 impl Block for PcbThermalBlock {
-    fn id(&self) -> &BlockId { &self.id }
-    fn block_type(&self) -> &str { "PcbThermal" }
-    fn ports(&self) -> &PortSet { &self.ports }
-    fn ports_mut(&mut self) -> &mut PortSet { &mut self.ports }
-    fn params(&self) -> &ParameterSet { &self.params }
-    fn params_mut(&mut self) -> &mut ParameterSet { &mut self.params }
-    fn status(&self) -> ComponentStatus { self.status }
-    fn set_status(&mut self, status: ComponentStatus) { self.status = status; }
-    fn set_time(&mut self, time: Time) { self.time = time; }
-    fn time(&self) -> Time { self.time }
+    fn id(&self) -> &BlockId {
+        &self.id
+    }
+    fn block_type(&self) -> &str {
+        "PcbThermal"
+    }
+    fn ports(&self) -> &PortSet {
+        &self.ports
+    }
+    fn ports_mut(&mut self) -> &mut PortSet {
+        &mut self.ports
+    }
+    fn params(&self) -> &ParameterSet {
+        &self.params
+    }
+    fn params_mut(&mut self) -> &mut ParameterSet {
+        &mut self.params
+    }
+    fn status(&self) -> ComponentStatus {
+        self.status
+    }
+    fn set_status(&mut self, status: ComponentStatus) {
+        self.status = status;
+    }
+    fn set_time(&mut self, time: Time) {
+        self.time = time;
+    }
+    fn time(&self) -> Time {
+        self.time
+    }
 
-    fn init(&mut self) -> Result<(), BlockError> { self.status = ComponentStatus::Ready; Ok(()) }
+    fn init(&mut self) -> Result<(), BlockError> {
+        self.status = ComponentStatus::Ready;
+        Ok(())
+    }
     fn output(&mut self) -> Result<(), BlockError> {
-        let power = self.ports.get("power_in").and_then(|p| p.read()).and_then(|s| {
-            if let SignalValue::Scalar(v) = &s.value { Some(*v) } else { None }
-        }).unwrap_or(0.0);
+        let power = self
+            .ports
+            .get("power_in")
+            .and_then(|p| p.read())
+            .and_then(|s| {
+                if let SignalValue::Scalar(v) = &s.value {
+                    Some(*v)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(0.0);
         let ambient = self.params.get_scalar("ambient_temp").unwrap_or(25.0);
         let theta_ja = self.params.get_scalar("theta_ja").unwrap_or(20.0);
         let temp = ambient + theta_ja * power;
         if let Some(p) = self.ports.get_mut("temp_out") {
-            p.write(Signal::new(SignalType::Continuous, SignalValue::Scalar(temp), self.time));
+            p.write(Signal::new(
+                SignalType::Continuous,
+                SignalValue::Scalar(temp),
+                self.time,
+            ));
         }
         Ok(())
     }
-    fn derivative(&self) -> Result<Vec<Scalar>, BlockError> { Ok(vec![]) }
-    fn update(&mut self) -> Result<(), BlockError> { Ok(()) }
-    fn zero_crossings(&self) -> Vec<Scalar> { vec![] }
-    fn terminate(&mut self) -> Result<(), BlockError> { self.status = ComponentStatus::Completed; Ok(()) }
+    fn derivative(&self) -> Result<Vec<Scalar>, BlockError> {
+        Ok(vec![])
+    }
+    fn update(&mut self) -> Result<(), BlockError> {
+        Ok(())
+    }
+    fn zero_crossings(&self) -> Vec<Scalar> {
+        vec![]
+    }
+    fn terminate(&mut self) -> Result<(), BlockError> {
+        self.status = ComponentStatus::Completed;
+        Ok(())
+    }
     fn clone_block(&self) -> Box<dyn Block> {
-        Box::new(Self { id: self.id.clone(), ports: PortSet::new(), params: ParameterSet::new(),
-            status: ComponentStatus::Inactive, time: 0.0, n_cells: self.n_cells })
+        Box::new(Self {
+            id: self.id.clone(),
+            ports: PortSet::new(),
+            params: ParameterSet::new(),
+            status: ComponentStatus::Inactive,
+            time: 0.0,
+            n_cells: self.n_cells,
+        })
     }
 }
 

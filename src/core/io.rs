@@ -188,10 +188,10 @@ mod tests {
     #[test]
     fn test_io_to_port_set() {
         let mut io = IODeclaration::new();
-        io.add_input(InputDecl::new("u", SignalType::Continuous)
-            .with_description("control input"));
-        io.add_output(OutputDecl::new("y", SignalType::Continuous)
-            .with_description("output signal"));
+        io.add_input(InputDecl::new("u", SignalType::Continuous).with_description("control input"));
+        io.add_output(
+            OutputDecl::new("y", SignalType::Continuous).with_description("output signal"),
+        );
         let ports = io.to_port_set();
         assert_eq!(ports.len(), 2);
         assert!(ports.get("u").is_some());

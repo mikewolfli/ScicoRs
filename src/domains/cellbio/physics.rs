@@ -44,8 +44,8 @@ pub const AVOGADRO_CELL: Scalar = 6.02214076e23;
 pub fn water_density(temp: Scalar) -> Scalar {
     // Approximate polynomial for water density 0-100°C
     let tc: Scalar = temp - 273.15;
-    999.842594 + 6.793952e-2 * tc - 9.095290e-3 * tc.powi(2)
-        + 1.001685e-4 * tc.powi(3) - 1.120083e-6 * tc.powi(4)
+    999.842594 + 6.793952e-2 * tc - 9.095290e-3 * tc.powi(2) + 1.001685e-4 * tc.powi(3)
+        - 1.120083e-6 * tc.powi(4)
         + 6.536332e-9 * tc.powi(5)
 }
 

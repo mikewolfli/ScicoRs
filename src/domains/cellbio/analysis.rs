@@ -40,7 +40,11 @@ pub fn specific_growth_rate(times: &[Scalar], densities: &[Scalar]) -> Result<Sc
 
     let sum_t: Scalar = times.iter().sum();
     let sum_ln: Scalar = ln_densities.iter().sum();
-    let sum_t_ln: Scalar = times.iter().zip(ln_densities.iter()).map(|(t, l)| t * l).sum();
+    let sum_t_ln: Scalar = times
+        .iter()
+        .zip(ln_densities.iter())
+        .map(|(t, l)| t * l)
+        .sum();
     let sum_t2: Scalar = times.iter().map(|t| t * t).sum();
 
     let denominator = n * sum_t2 - sum_t * sum_t;
@@ -107,13 +111,9 @@ pub fn metabolic_rates(media_history: &[CultureMedia], _dt: Scalar) -> Metabolic
     let initial = &media_history[0];
     let final_m = media_history.last().unwrap();
 
-    let glucose_diff = initial
-        .get_concentration("Glucose")
-        .unwrap_or(0.0)
+    let glucose_diff = initial.get_concentration("Glucose").unwrap_or(0.0)
         - final_m.get_concentration("Glucose").unwrap_or(0.0);
-    let lactate_diff = final_m
-        .get_concentration("Lactate")
-        .unwrap_or(0.0)
+    let lactate_diff = final_m.get_concentration("Lactate").unwrap_or(0.0)
         - initial.get_concentration("Lactate").unwrap_or(0.0);
 
     let yield_lg = if glucose_diff > 0.0 {

@@ -34,7 +34,8 @@ pub mod traits;
 
 pub use hybrid::{
     BlockTaskType, ScheduleConfig, SchedulePhase, build_schedule, classify_blocks,
-    execute_deriv_phase, execute_event_detection, execute_output_phase, execute_update_phase,
+    execute_deriv_phase, execute_event_detection, execute_output_phase, execute_update_phase_mut,
+    validate_update_phase,
 };
 pub use multirate::{ClockDomain, MultiRateScheduler, build_multirate_schedule};
 pub use signal_flow::{SignalFlowGraph, analyze_signal_flow, compute_propagation_layers};

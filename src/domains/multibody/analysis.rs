@@ -25,11 +25,7 @@ pub fn center_of_mass(bodies: &[RigidBody]) -> Coord3D {
     }
 
     if total_mass > 0.0 {
-        Coord3D::new(
-            com_x / total_mass,
-            com_y / total_mass,
-            com_z / total_mass,
-        )
+        Coord3D::new(com_x / total_mass, com_y / total_mass, com_z / total_mass)
     } else {
         Coord3D::new(0.0, 0.0, 0.0)
     }
@@ -246,7 +242,11 @@ mod tests {
 
     #[test]
     fn test_total_kinetic_energy() {
-        let bodies = vec![make_body("b1", Coord3D::new(0.0, 0.0, 0.0), [2.0, 0.0, 0.0])];
+        let bodies = vec![make_body(
+            "b1",
+            Coord3D::new(0.0, 0.0, 0.0),
+            [2.0, 0.0, 0.0],
+        )];
         // KE = 0.5 * 2 * 4 = 4
         let ke = total_kinetic_energy(&bodies);
         assert!((ke - 4.0).abs() < 1e-12);
@@ -264,14 +264,22 @@ mod tests {
 
     #[test]
     fn test_rms_velocity() {
-        let bodies = vec![make_body("b1", Coord3D::new(0.0, 0.0, 0.0), [3.0, 4.0, 0.0])];
+        let bodies = vec![make_body(
+            "b1",
+            Coord3D::new(0.0, 0.0, 0.0),
+            [3.0, 4.0, 0.0],
+        )];
         let rms = rms_velocity(&bodies);
         assert!((rms - 5.0).abs() < 1e-12); // sqrt(25) = 5
     }
 
     #[test]
     fn test_average_speed() {
-        let bodies = vec![make_body("b1", Coord3D::new(0.0, 0.0, 0.0), [3.0, 4.0, 0.0])];
+        let bodies = vec![make_body(
+            "b1",
+            Coord3D::new(0.0, 0.0, 0.0),
+            [3.0, 4.0, 0.0],
+        )];
         let avg = average_speed(&bodies);
         assert!((avg - 5.0).abs() < 1e-12);
     }

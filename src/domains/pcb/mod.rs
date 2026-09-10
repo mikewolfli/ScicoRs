@@ -26,5 +26,5 @@ pub use transmission::{
     TransmissionLine, cpw_z0, microstrip_z0, propagation_delay, s2p_to_t_params, stripline_z0,
 };
 
-pub mod via_model;
 pub mod serdes_com;
+pub mod via_model;

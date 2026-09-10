@@ -25,12 +25,12 @@ pub use analysis::{
 };
 pub use body::{FlexibleBody, Quaternion, RigidBody};
 pub use collision::{
-    collision_impulse, contact_force_spring_damper, friction_force, sphere_sphere_collision,
-    Aabb, CollisionResult, CollisionShape,
+    Aabb, CollisionResult, CollisionShape, collision_impulse, contact_force_spring_damper,
+    friction_force, sphere_sphere_collision,
 };
 pub use constraints::{Constraint, ConstraintJacobian, ConstraintSolver, ConstraintType};
 pub use dynamics::{ExternalForce, MultibodySystem};
-pub use physics::{RigidBodyProperties, GRAVITY};
+pub use physics::{GRAVITY, RigidBodyProperties};
 
 pub mod articulated_body;
 pub mod contact_dynamics;

@@ -19,5 +19,5 @@ pub use drive_ctrl::{FocController, PiController, drive_efficiency, torque_speed
 pub use motors::{DcMotor, InductionMotor, Pmsm, StepperMotor};
 pub use thermal_power::{PowerLossBreakdown, device_junction_temp, heatsink_thermal_resistance};
 
-pub mod resonant_converter;
 pub mod dab_converter;
+pub mod resonant_converter;

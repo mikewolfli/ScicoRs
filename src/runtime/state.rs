@@ -159,11 +159,7 @@ impl ContinuousState {
 
     /// Restore state from a snapshot (continuous portion only).
     pub fn restore(&mut self, snapshot: &StateSnapshot) {
-        assert_eq!(
-            snapshot.x.len(),
-            self.x.len(),
-            "snapshot x length mismatch"
-        );
+        assert_eq!(snapshot.x.len(), self.x.len(), "snapshot x length mismatch");
         assert_eq!(
             snapshot.dx.len(),
             self.dx.len(),
@@ -232,8 +228,11 @@ impl DiscreteState {
     /// Build from a `StateDeclaration` (Phase 1 type).
     pub fn from_declaration(decl: &StateDeclaration) -> Self {
         let names: Vec<&str> = decl.discrete.iter().map(|v| v.name.as_str()).collect();
-        let initials: Vec<SignalValue> =
-            decl.discrete.iter().map(|v| v.initial_value.clone()).collect();
+        let initials: Vec<SignalValue> = decl
+            .discrete
+            .iter()
+            .map(|v| v.initial_value.clone())
+            .collect();
         Self::new(&names, &initials)
     }
 
@@ -292,11 +291,7 @@ impl DiscreteState {
 
     /// Restore discrete state from a snapshot.
     pub fn restore(&mut self, snapshot: &StateSnapshot) {
-        assert_eq!(
-            snapshot.z.len(),
-            self.z.len(),
-            "snapshot z length mismatch"
-        );
+        assert_eq!(snapshot.z.len(), self.z.len(), "snapshot z length mismatch");
         for (i, v) in snapshot.z.iter().enumerate() {
             self.z[i] = v.clone();
         }
@@ -320,7 +315,10 @@ pub struct SimStateManager {
 impl SimStateManager {
     /// Create a new state manager from individual state objects.
     pub fn new(continuous: ContinuousState, discrete: DiscreteState) -> Self {
-        Self { continuous, discrete }
+        Self {
+            continuous,
+            discrete,
+        }
     }
 
     /// Build from a `StateDeclaration`, extracting continuous and discrete parts.
@@ -463,7 +461,10 @@ mod tests {
     fn test_state_manager_from_declaration() {
         let mut decl = StateDeclaration::new();
         decl.add_continuous(crate::core::state::ContinuousStateVar::new("pos", 0.0));
-        decl.add_discrete(crate::core::state::DiscreteStateVar::new("mode", SignalValue::Integer(1)));
+        decl.add_discrete(crate::core::state::DiscreteStateVar::new(
+            "mode",
+            SignalValue::Integer(1),
+        ));
         let mgr = SimStateManager::from_declaration(&decl);
         assert_eq!(mgr.continuous.len(), 1);
         assert_eq!(mgr.discrete.len(), 1);
@@ -499,7 +500,10 @@ mod tests {
 
     #[test]
     fn test_discrete_state_names() {
-        let ds = DiscreteState::new(&["a", "b"], &[SignalValue::Scalar(0.0), SignalValue::Scalar(1.0)]);
+        let ds = DiscreteState::new(
+            &["a", "b"],
+            &[SignalValue::Scalar(0.0), SignalValue::Scalar(1.0)],
+        );
         assert_eq!(ds.names(), &["a", "b"]);
     }
 

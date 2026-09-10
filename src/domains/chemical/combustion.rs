@@ -176,8 +176,17 @@ mod tests {
 
     #[test]
     fn test_explosive_limits_all() {
-        for gas in &["methane", "hydrogen", "propane", "acetylene", "carbon_monoxide"] {
-            assert!(explosive_limits(gas).is_some(), "gas {gas} should have limits");
+        for gas in &[
+            "methane",
+            "hydrogen",
+            "propane",
+            "acetylene",
+            "carbon_monoxide",
+        ] {
+            assert!(
+                explosive_limits(gas).is_some(),
+                "gas {gas} should have limits"
+            );
         }
     }
 

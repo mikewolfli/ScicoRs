@@ -41,7 +41,7 @@ pub use workflow::{
 
 pub mod algebraic;
 pub use algebraic::{
-    AlgebraicLoop, AlgebraicLoopDetector, AlgebraicSolverConfig, AlgebraicSolveResult,
+    AlgebraicLoop, AlgebraicLoopDetector, AlgebraicSolveResult, AlgebraicSolverConfig,
     DirectFeedthroughPath, FixedPointIteration, LoopAnalysis, NumericalGuard, RelaxationIteration,
     find_direct_feedthrough_paths,
 };

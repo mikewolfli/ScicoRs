@@ -86,12 +86,6 @@ fn main() {
     println!("--------------------------------------------------------------");
     println!("max |Δ| SIMD        = {:.3e}", max_diff(&c1));
     println!("max |Δ| SIMD+rayon  = {:.3e}", max_diff(&c2));
-    println!(
-        "speedup  SIMD vs naive = {:.2}×",
-        naive / simd
-    );
-    println!(
-        "speedup  SIMD+rayon vs naive = {:.2}×",
-        naive / simd_par
-    );
+    println!("speedup  SIMD vs naive = {:.2}×", naive / simd);
+    println!("speedup  SIMD+rayon vs naive = {:.2}×", naive / simd_par);
 }

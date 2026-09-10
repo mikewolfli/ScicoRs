@@ -6,7 +6,7 @@
 //! Every block and engine operation has access to the context.
 
 use crate::core::error::SimError;
-use crate::core::types::{SignalValue, Time, EPSILON};
+use crate::core::types::{EPSILON, SignalValue, Time};
 use std::fmt;
 use std::sync::Arc;
 
@@ -31,7 +31,9 @@ impl PartialEq for SimRunMode {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Normal, Self::Normal) => true,
-            (Self::RealTime { time_scale: a }, Self::RealTime { time_scale: b }) => (a - b).abs() < EPSILON,
+            (Self::RealTime { time_scale: a }, Self::RealTime { time_scale: b }) => {
+                (a - b).abs() < EPSILON
+            }
             (Self::SingleStep, Self::SingleStep) => true,
             (Self::Paused, Self::Paused) => true,
             _ => false,
@@ -42,8 +44,10 @@ impl fmt::Debug for SimRunMode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Normal => write!(f, "Normal"),
-            Self::RealTime { time_scale } => f.debug_struct("RealTime")
-                .field("time_scale", time_scale).finish(),
+            Self::RealTime { time_scale } => f
+                .debug_struct("RealTime")
+                .field("time_scale", time_scale)
+                .finish(),
             Self::SingleStep => write!(f, "SingleStep"),
             Self::Paused => write!(f, "Paused"),
             Self::Breakpoint { .. } => write!(f, "Breakpoint(<condition>)"),
@@ -54,7 +58,10 @@ impl fmt::Debug for SimRunMode {
 impl SimRunMode {
     /// Returns `true` if time should advance in this mode.
     pub fn advances_time(&self) -> bool {
-        matches!(self, Self::Normal | Self::RealTime { .. } | Self::SingleStep | Self::Breakpoint { .. })
+        matches!(
+            self,
+            Self::Normal | Self::RealTime { .. } | Self::SingleStep | Self::Breakpoint { .. }
+        )
     }
 
     /// Returns `true` if this mode automatically stops after one step.
@@ -353,7 +360,10 @@ impl SimContext {
 
     /// Get log entries filtered by level.
     pub fn logs_by_level(&self, level: LogLevel) -> Vec<&LogEntry> {
-        self.log_buffer.iter().filter(|e| e.level == level).collect()
+        self.log_buffer
+            .iter()
+            .filter(|e| e.level == level)
+            .collect()
     }
 
     // ── Error tracking ──
@@ -485,10 +495,7 @@ mod tests {
         let mut ctx = SimContext::new(TimeConfig::default());
         ctx.set_shared("gain", SignalValue::Scalar(2.0));
         assert!(ctx.has_shared("gain"));
-        assert_eq!(
-            ctx.get_shared("gain"),
-            Some(&SignalValue::Scalar(2.0))
-        );
+        assert_eq!(ctx.get_shared("gain"), Some(&SignalValue::Scalar(2.0)));
         ctx.remove_shared("gain");
         assert!(!ctx.has_shared("gain"));
     }

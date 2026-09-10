@@ -11,9 +11,15 @@ pub struct Phasor {
 }
 
 impl Phasor {
-    pub fn new(magnitude: Scalar, phase: Scalar) -> Self { Self { magnitude, phase } }
-    pub fn real(&self) -> Scalar { self.magnitude * f64::cos(self.phase) }
-    pub fn imag(&self) -> Scalar { self.magnitude * f64::sin(self.phase) }
+    pub fn new(magnitude: Scalar, phase: Scalar) -> Self {
+        Self { magnitude, phase }
+    }
+    pub fn real(&self) -> Scalar {
+        self.magnitude * f64::cos(self.phase)
+    }
+    pub fn imag(&self) -> Scalar {
+        self.magnitude * f64::sin(self.phase)
+    }
 }
 
 /// Plane electromagnetic wave.
@@ -29,7 +35,12 @@ impl PlaneWave {
     pub fn new(e0: Phasor, freq: Scalar, direction: Coord3D) -> Self {
         let eta = 376.730313668;
         let h0_mag = e0.magnitude / eta;
-        Self { e0, h0: Phasor::new(h0_mag, e0.phase), direction, freq }
+        Self {
+            e0,
+            h0: Phasor::new(h0_mag, e0.phase),
+            direction,
+            freq,
+        }
     }
 
     pub fn poynting_vector(&self) -> Scalar {
@@ -89,8 +100,14 @@ impl Fdtd1D {
             self.ez[i] += dt_over_dx * (self.hy[i] - self.hy[i - 1]);
         }
         match self.boundary {
-            BoundaryType::PEC => { self.ez[0] = 0.0; self.ez[n - 1] = 0.0; }
-            BoundaryType::PMC => { self.ez[0] = self.ez[1]; self.ez[n - 1] = self.ez[n - 2]; }
+            BoundaryType::PEC => {
+                self.ez[0] = 0.0;
+                self.ez[n - 1] = 0.0;
+            }
+            BoundaryType::PMC => {
+                self.ez[0] = self.ez[1];
+                self.ez[n - 1] = self.ez[n - 2];
+            }
             BoundaryType::Absorbing => { /* Mur 1st order: left */ }
         }
     }
@@ -114,8 +131,16 @@ impl Fdtd1D {
     }
 
     pub fn probe(&self, position: usize) -> (Scalar, Scalar) {
-        let ez = if position < self.ez.len() { self.ez[position] } else { 0.0 };
-        let hy = if position < self.hy.len() { self.hy[position] } else { 0.0 };
+        let ez = if position < self.ez.len() {
+            self.ez[position]
+        } else {
+            0.0
+        };
+        let hy = if position < self.hy.len() {
+            self.hy[position]
+        } else {
+            0.0
+        };
         (ez, hy)
     }
 }

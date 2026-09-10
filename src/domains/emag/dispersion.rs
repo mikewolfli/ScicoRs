@@ -9,9 +9,21 @@ use num_complex::Complex64;
 /// Dispersion model types.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DispersionModel {
-    Drude { wp: Scalar, gamma: Scalar },
-    Debye { eps_s: Scalar, eps_inf: Scalar, tau: Scalar },
-    Lorentz { eps_s: Scalar, eps_inf: Scalar, wp: Scalar, gamma: Scalar },
+    Drude {
+        wp: Scalar,
+        gamma: Scalar,
+    },
+    Debye {
+        eps_s: Scalar,
+        eps_inf: Scalar,
+        tau: Scalar,
+    },
+    Lorentz {
+        eps_s: Scalar,
+        eps_inf: Scalar,
+        wp: Scalar,
+        gamma: Scalar,
+    },
 }
 
 impl DispersionModel {
@@ -21,14 +33,28 @@ impl DispersionModel {
             Self::Drude { wp, gamma } => {
                 let w2 = omega * omega;
                 let g2 = gamma * gamma;
-                Complex64::new(1.0 - wp * wp / (w2 + g2), -wp * wp * gamma / (omega * (w2 + g2)))
+                Complex64::new(
+                    1.0 - wp * wp / (w2 + g2),
+                    -wp * wp * gamma / (omega * (w2 + g2)),
+                )
             }
-            Self::Debye { eps_s, eps_inf, tau } => {
+            Self::Debye {
+                eps_s,
+                eps_inf,
+                tau,
+            } => {
                 let tau_omega = tau * omega;
-                Complex64::new(eps_inf + (eps_s - eps_inf) / (1.0 + tau_omega * tau_omega),
-                    -(eps_s - eps_inf) * tau_omega / (1.0 + tau_omega * tau_omega))
+                Complex64::new(
+                    eps_inf + (eps_s - eps_inf) / (1.0 + tau_omega * tau_omega),
+                    -(eps_s - eps_inf) * tau_omega / (1.0 + tau_omega * tau_omega),
+                )
             }
-            Self::Lorentz { eps_s, eps_inf, wp, gamma } => {
+            Self::Lorentz {
+                eps_s,
+                eps_inf,
+                wp,
+                gamma,
+            } => {
                 let w2 = omega * omega;
                 let num = (eps_s - eps_inf) * wp * wp;
                 let denom_r = wp * wp - w2;
@@ -51,16 +77,26 @@ impl DispersionModel {
 
 /// Drude model for metals (e.g., gold, silver).
 pub fn drude_gold() -> DispersionModel {
-    DispersionModel::Drude { wp: 1.37e16, gamma: 4.05e13 }
+    DispersionModel::Drude {
+        wp: 1.37e16,
+        gamma: 4.05e13,
+    }
 }
 
 pub fn drude_silver() -> DispersionModel {
-    DispersionModel::Drude { wp: 1.39e16, gamma: 3.21e13 }
+    DispersionModel::Drude {
+        wp: 1.39e16,
+        gamma: 3.21e13,
+    }
 }
 
 /// Debye model for polar liquids (e.g., water).
 pub fn debye_water() -> DispersionModel {
-    DispersionModel::Debye { eps_s: 80.0, eps_inf: 4.0, tau: 8.5e-12 }
+    DispersionModel::Debye {
+        eps_s: 80.0,
+        eps_inf: 4.0,
+        tau: 8.5e-12,
+    }
 }
 
 #[cfg(test)]
@@ -85,7 +121,12 @@ mod tests {
 
     #[test]
     fn test_lorentz_epsilon() {
-        let lt = DispersionModel::Lorentz { eps_s: 3.0, eps_inf: 1.0, wp: 1e15, gamma: 1e14 };
+        let lt = DispersionModel::Lorentz {
+            eps_s: 3.0,
+            eps_inf: 1.0,
+            wp: 1e15,
+            gamma: 1e14,
+        };
         let eps = lt.epsilon(1e15);
         assert!(eps.re.is_finite());
         assert!(eps.im.is_finite());

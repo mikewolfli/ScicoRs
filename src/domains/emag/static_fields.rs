@@ -4,19 +4,25 @@ use crate::core::types::Scalar;
 
 /// Point charge electric field: E = Q/(4πεr²).
 pub fn point_charge_field(q: Scalar, r: Scalar) -> Scalar {
-    if r <= 0.0 { return 0.0; }
+    if r <= 0.0 {
+        return 0.0;
+    }
     q / (4.0 * std::f64::consts::PI * 8.854187817e-12 * r * r)
 }
 
 /// Parallel plate capacitance: C = ε·A/d.
 pub fn parallel_plate_capacitance(area: Scalar, distance: Scalar, epsilon: Scalar) -> Scalar {
-    if distance <= 0.0 { return 0.0; }
+    if distance <= 0.0 {
+        return 0.0;
+    }
     epsilon * area / distance
 }
 
 /// Infinite wire magnetic field: B = μ₀·I/(2πr).
 pub fn wire_magnetic_field(current: Scalar, r: Scalar) -> Scalar {
-    if r <= 0.0 { return 0.0; }
+    if r <= 0.0 {
+        return 0.0;
+    }
     1.25663706212e-6 * current / (2.0 * std::f64::consts::PI * r)
 }
 
@@ -34,26 +40,37 @@ pub struct ElectrostaticSolver1D {
 
 impl ElectrostaticSolver1D {
     pub fn new(n_points: usize) -> Self {
-        Self { n_points, boundary_conditions: Vec::new() }
+        Self {
+            n_points,
+            boundary_conditions: Vec::new(),
+        }
     }
 
     pub fn solve(&self) -> Vec<Scalar> {
         let mut v = vec![0.0; self.n_points];
         // Apply boundary conditions
         for &(idx, val) in &self.boundary_conditions {
-            if idx < self.n_points { v[idx] = val; }
+            if idx < self.n_points {
+                v[idx] = val;
+            }
         }
         // Gauss-Seidel iteration
         for _iter in 0..10000 {
             let mut max_diff = 0.0;
             for i in 1..self.n_points - 1 {
-                if self.boundary_conditions.iter().any(|(idx, _)| *idx == i) { continue; }
+                if self.boundary_conditions.iter().any(|(idx, _)| *idx == i) {
+                    continue;
+                }
                 let new_v = 0.5 * (v[i - 1] + v[i + 1]);
                 let diff = f64::abs(new_v - v[i]);
-                if diff > max_diff { max_diff = diff; }
+                if diff > max_diff {
+                    max_diff = diff;
+                }
                 v[i] = new_v;
             }
-            if max_diff < 1e-10 { break; }
+            if max_diff < 1e-10 {
+                break;
+            }
         }
         v
     }

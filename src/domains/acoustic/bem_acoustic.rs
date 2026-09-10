@@ -438,14 +438,36 @@ mod tests {
         }
     }
 
+    /// The far-field pattern must be produced and be physically meaningful.
+    ///
+    /// The previous version wrapped the body in `if let Ok(p)`, so an error from
+    /// `surface_pressure` skipped every assertion and the test passed regardless
+    /// of the far-field implementation.
     #[test]
     fn test_far_field() {
         let bem = make_sphere_bem();
         let v_n = vec![0.01; 12];
-        if let Ok(p) = bem.surface_pressure(&v_n) {
-            let p_far = bem.far_field_pattern(0.0, 0.0, &p);
-            assert!(p_far.norm_sqr().is_finite());
-        }
+        let p = bem
+            .surface_pressure(&v_n)
+            .expect("a sphere BEM must solve for this excitation");
+        assert!(
+            !p.is_empty(),
+            "a solved sphere must produce surface pressures"
+        );
+        assert!(
+            p.iter().all(|v| v.is_finite()),
+            "surface pressures must be finite"
+        );
+
+        let p_far = bem.far_field_pattern(0.0, 0.0, &p);
+        assert!(
+            p_far.norm_sqr().is_finite(),
+            "the far-field value must be finite"
+        );
+        assert!(
+            p_far.norm_sqr() > 0.0,
+            "a non-zero excitation must radiate a non-zero field, got {p_far:?}"
+        );
     }
 
     #[test]

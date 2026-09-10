@@ -50,8 +50,7 @@ impl SdofSystem {
 
     /// Frequency response function magnitude |H(ω)| = 1 / √((k-m·ω²)² + (c·ω)²).
     pub fn frf_magnitude(&self, omega: Scalar) -> Scalar {
-        let denom = (self.k - self.m * omega * omega).powi(2)
-            + (self.c * omega).powi(2);
+        let denom = (self.k - self.m * omega * omega).powi(2) + (self.c * omega).powi(2);
         if denom <= 0.0 {
             return Scalar::INFINITY;
         }
@@ -178,14 +177,22 @@ mod tests {
 
     #[test]
     fn test_sdof_natural_frequency() {
-        let sys = SdofSystem { m: 100.0, c: 50.0, k: 10000.0 };
+        let sys = SdofSystem {
+            m: 100.0,
+            c: 50.0,
+            k: 10000.0,
+        };
         let fn_expected = Scalar::sqrt(10000.0 / 100.0) / (2.0 * std::f64::consts::PI);
         assert!((sys.natural_frequency() - fn_expected).abs() < 1e-10);
     }
 
     #[test]
     fn test_sdof_damping_ratio() {
-        let sys = SdofSystem { m: 100.0, c: 200.0, k: 10000.0 };
+        let sys = SdofSystem {
+            m: 100.0,
+            c: 200.0,
+            k: 10000.0,
+        };
         let zeta = sys.damping_ratio();
         let expected = 200.0 / (2.0 * Scalar::sqrt(10000.0 * 100.0));
         assert!((zeta - expected).abs() < 1e-10);
@@ -193,7 +200,11 @@ mod tests {
 
     #[test]
     fn test_sdof_frf_magnitude() {
-        let sys = SdofSystem { m: 10.0, c: 5.0, k: 1000.0 };
+        let sys = SdofSystem {
+            m: 10.0,
+            c: 5.0,
+            k: 1000.0,
+        };
         // At resonance: ω = ωₙ = √(1000/10) = 10 rad/s
         let h = sys.frf_magnitude(10.0);
         // |H(ωₙ)| = 1/(c·ωₙ) = 1/(5*10) = 0.02
@@ -202,7 +213,11 @@ mod tests {
 
     #[test]
     fn test_sdof_newmark_beta() {
-        let sys = SdofSystem { m: 10.0, c: 2.0, k: 100.0 };
+        let sys = SdofSystem {
+            m: 10.0,
+            c: 2.0,
+            k: 100.0,
+        };
         // Apply a constant force
         let force: Vec<(Scalar, Scalar)> = (0..10).map(|i| (i as Scalar * 0.01, 100.0)).collect();
         let result = sys.newmark_beta(&force, 0.01, 0.25, 0.5);
@@ -214,7 +229,11 @@ mod tests {
 
     #[test]
     fn test_newmark_empty_force() {
-        let sys = SdofSystem { m: 10.0, c: 1.0, k: 100.0 };
+        let sys = SdofSystem {
+            m: 10.0,
+            c: 1.0,
+            k: 100.0,
+        };
         let result = sys.newmark_beta(&[], 0.01, 0.25, 0.5);
         assert!(result.is_empty());
     }
@@ -254,13 +273,21 @@ mod tests {
 
     #[test]
     fn test_sdof_zero_mass() {
-        let sys = SdofSystem { m: 0.0, c: 0.0, k: 100.0 };
+        let sys = SdofSystem {
+            m: 0.0,
+            c: 0.0,
+            k: 100.0,
+        };
         assert!((sys.natural_frequency() - 0.0).abs() < 1e-10);
     }
 
     #[test]
     fn test_sdof_damped_frequency() {
-        let sys = SdofSystem { m: 100.0, c: 20.0, k: 10000.0 };
+        let sys = SdofSystem {
+            m: 100.0,
+            c: 20.0,
+            k: 10000.0,
+        };
         let wd = sys.damped_frequency_rad();
         let wn = sys.natural_frequency_rad();
         let zeta = sys.damping_ratio();
@@ -270,7 +297,11 @@ mod tests {
 
     #[test]
     fn test_sdof_critical_damping() {
-        let sys = SdofSystem { m: 100.0, c: 2000.0, k: 10000.0 };
+        let sys = SdofSystem {
+            m: 100.0,
+            c: 2000.0,
+            k: 10000.0,
+        };
         // ζ = 2000/(2*√(10000*100)) = 2000/2000 = 1.0
         let wd = sys.damped_frequency_rad();
         assert!((wd - 0.0).abs() < 1e-10);

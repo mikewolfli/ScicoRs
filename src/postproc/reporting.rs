@@ -258,7 +258,11 @@ impl ExportFormat {
 pub struct DataExporter;
 
 impl DataExporter {
-    pub fn export(recorder: &DataRecorder, format: ExportFormat, path: &str) -> Result<(), String> {
+    pub fn export(
+        recorder: &mut DataRecorder,
+        format: ExportFormat,
+        path: &str,
+    ) -> Result<(), String> {
         match format {
             ExportFormat::Csv => recorder.export_csv(path),
             ExportFormat::Json => {
@@ -404,7 +408,7 @@ mod tests {
         s.insert("x".to_string(), 1.0);
         r.record(0.0, &s);
         let path = "/tmp/test_export.csv";
-        assert!(DataExporter::export(&r, ExportFormat::Csv, path).is_ok());
+        assert!(DataExporter::export(&mut r, ExportFormat::Csv, path).is_ok());
         let _ = std::fs::remove_file(path);
     }
 
@@ -526,12 +530,12 @@ mod tests {
 
     #[test]
     fn test_export_toml_matches_json_data() {
-        let r = sample_recorder();
+        let mut r = sample_recorder();
         let json_path = "/tmp/test_export_fmt.json";
         let toml_path = "/tmp/test_export_fmt.toml";
 
-        DataExporter::export(&r, ExportFormat::Json, json_path).unwrap();
-        DataExporter::export(&r, ExportFormat::Toml, toml_path).unwrap();
+        DataExporter::export(&mut r, ExportFormat::Json, json_path).unwrap();
+        DataExporter::export(&mut r, ExportFormat::Toml, toml_path).unwrap();
 
         let json = std::fs::read_to_string(json_path).unwrap();
         let toml = std::fs::read_to_string(toml_path).unwrap();
@@ -550,9 +554,9 @@ mod tests {
 
     #[test]
     fn test_export_vtk_contains_real_series() {
-        let r = sample_recorder();
+        let mut r = sample_recorder();
         let path = "/tmp/test_export_fmt.vtk";
-        DataExporter::export(&r, ExportFormat::Vtk, path).unwrap();
+        DataExporter::export(&mut r, ExportFormat::Vtk, path).unwrap();
         let vtk = std::fs::read_to_string(path).unwrap();
 
         // A structurally valid legacy VTK file for the two recorded samples.
@@ -573,11 +577,11 @@ mod tests {
     fn test_every_export_format_is_implemented() {
         // Guards against re-introducing advertised-but-missing formats: every
         // variant must name itself and export successfully.
-        let r = sample_recorder();
+        let mut r = sample_recorder();
         for (i, format) in ExportFormat::SUPPORTED.iter().enumerate() {
             assert!(!format.name().is_empty());
             let path = format!("/tmp/test_export_all_{}", i);
-            DataExporter::export(&r, *format, &path)
+            DataExporter::export(&mut r, *format, &path)
                 .unwrap_or_else(|e| panic!("format {} failed: {}", format.name(), e));
             let written = std::fs::read_to_string(&path).unwrap();
             assert!(

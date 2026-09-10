@@ -13,14 +13,10 @@ pub mod parallel;
 pub mod stage;
 
 // ── dag ──
-pub use dag::{
-    EdgeDataType, WorkflowDAG, WorkflowEdge, WorkflowTask,
-};
+pub use dag::{EdgeDataType, WorkflowDAG, WorkflowEdge, WorkflowTask};
 
 // ── stage ──
-pub use stage::{
-    decompose_stages, stage_from_task_ids, PipelineStageType, WorkflowStage,
-};
+pub use stage::{PipelineStageType, WorkflowStage, decompose_stages, stage_from_task_ids};
 
 // ── parallel ──
 pub use parallel::{BarrierSync, ParallelScheduler};

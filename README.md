@@ -1,6 +1,6 @@
-# SCIcoRS — Unified Simulation Kernel for All Humanity
+# SCIcoRS — Unified Simulation Kernel
 
-[![中文文档](README.zh-CN.md)](README.zh-CN.md) | [Checklist](docs/checklist/CHECKLIST.MD) | [Roadmap (Blueprint)](docs/blueprints/roadmap.md) | [Design Principles](docs/blueprints/principle.md)
+[![中文文档](README.zh-CN.md)](README.zh-CN.md) | [Changelog](CHANGELOG.md) | [Checklist](docs/checklist/CHECKLIST.MD) | [Roadmap (Blueprint)](docs/blueprints/roadmap.md) | [Design Principles](docs/blueprints/principle.md)
 
 > **SCI**entific **co**mputing & **R**eality **S**imulation — a universal simulation kernel that unifies engineering and scientific simulation across all disciplines, scales, and fields.
 
@@ -291,4 +291,4 @@ at your option.
 
 ---
 
-[中文文档](README.zh-CN.md) | [Checklist](docs/checklist/CHECKLIST.MD) | [Roadmap](docs/blueprints/roadmap.md) | [Design Principles](docs/blueprints/principle.md) | [Dev Logs](docs/log/)
+[中文文档](README.zh-CN.md) | [Changelog](CHANGELOG.md) | [Checklist](docs/checklist/CHECKLIST.MD) | [Roadmap](docs/blueprints/roadmap.md) | [Design Principles](docs/blueprints/principle.md) | [Dev Logs](docs/log/)

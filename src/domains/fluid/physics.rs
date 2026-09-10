@@ -90,7 +90,10 @@ pub struct HighTempAirProps {
     pub speed_of_sound_effective: Scalar,
 }
 
-pub fn high_temp_air_properties(t_translational: Scalar, t_vibrational: Scalar) -> HighTempAirProps {
+pub fn high_temp_air_properties(
+    t_translational: Scalar,
+    t_vibrational: Scalar,
+) -> HighTempAirProps {
     if t_translational <= 0.0 || t_vibrational <= 0.0 {
         return HighTempAirProps {
             gamma_effective: AIR_GAMMA,

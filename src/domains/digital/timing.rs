@@ -49,16 +49,16 @@ impl TimingAnalyzer {
     /// Create a new timing analyzer with default delay values.
     pub fn new(clock_period: Scalar) -> Self {
         let mut gate_delays = HashMap::new();
-        gate_delays.insert("INV".to_string(), 10e-12);   // 10 ps
+        gate_delays.insert("INV".to_string(), 10e-12); // 10 ps
         gate_delays.insert("NAND2".to_string(), 15e-12); // 15 ps
-        gate_delays.insert("NOR2".to_string(), 15e-12);  // 15 ps
-        gate_delays.insert("AND2".to_string(), 20e-12);  // 20 ps
-        gate_delays.insert("OR2".to_string(), 20e-12);   // 20 ps
-        gate_delays.insert("XOR2".to_string(), 30e-12);  // 30 ps
-        gate_delays.insert("DFF".to_string(), 50e-12);   // 50 ps (clk→q)
-        gate_delays.insert("BUF".to_string(), 10e-12);   // 10 ps
-        gate_delays.insert("MUX2".to_string(), 25e-12);  // 25 ps
-        gate_delays.insert("ADD".to_string(), 100e-12);  // 100 ps (approx per bit)
+        gate_delays.insert("NOR2".to_string(), 15e-12); // 15 ps
+        gate_delays.insert("AND2".to_string(), 20e-12); // 20 ps
+        gate_delays.insert("OR2".to_string(), 20e-12); // 20 ps
+        gate_delays.insert("XOR2".to_string(), 30e-12); // 30 ps
+        gate_delays.insert("DFF".to_string(), 50e-12); // 50 ps (clk→q)
+        gate_delays.insert("BUF".to_string(), 10e-12); // 10 ps
+        gate_delays.insert("MUX2".to_string(), 25e-12); // 25 ps
+        gate_delays.insert("ADD".to_string(), 100e-12); // 100 ps (approx per bit)
 
         Self {
             gate_delays,
@@ -87,7 +87,10 @@ impl TimingAnalyzer {
 
     /// Get the wire delay between two nodes.
     pub fn wire_delay(&self, source: usize, dest: usize) -> Scalar {
-        self.wire_delays.get(&(source, dest)).copied().unwrap_or(5e-12)
+        self.wire_delays
+            .get(&(source, dest))
+            .copied()
+            .unwrap_or(5e-12)
     }
 
     /// Compute the critical path delay through a netlist.
@@ -258,8 +261,16 @@ mod tests {
         let ta = TimingAnalyzer::new(1e-9);
         // Simple path: input(0) → INV(1) → output(2)
         let netlist = vec![
-            GateConnection { source: 0, destination: 1, gate_type: "INV".to_string() },
-            GateConnection { source: 1, destination: 2, gate_type: "BUF".to_string() },
+            GateConnection {
+                source: 0,
+                destination: 1,
+                gate_type: "INV".to_string(),
+            },
+            GateConnection {
+                source: 1,
+                destination: 2,
+                gate_type: "BUF".to_string(),
+            },
         ];
         let delay = ta.critical_path_delay(&netlist, &[0], &[2]);
         // INV delay (10ps) + wire(5ps) + BUF delay (10ps) + wire(5ps) = 30ps
@@ -273,10 +284,26 @@ mod tests {
         // Path A: 0 → INV(1) → BUF(2)
         // Path B: 0 → NAND2(3) → BUF(4)
         let netlist = vec![
-            GateConnection { source: 0, destination: 1, gate_type: "INV".to_string() },
-            GateConnection { source: 1, destination: 2, gate_type: "BUF".to_string() },
-            GateConnection { source: 0, destination: 3, gate_type: "NAND2".to_string() },
-            GateConnection { source: 3, destination: 4, gate_type: "BUF".to_string() },
+            GateConnection {
+                source: 0,
+                destination: 1,
+                gate_type: "INV".to_string(),
+            },
+            GateConnection {
+                source: 1,
+                destination: 2,
+                gate_type: "BUF".to_string(),
+            },
+            GateConnection {
+                source: 0,
+                destination: 3,
+                gate_type: "NAND2".to_string(),
+            },
+            GateConnection {
+                source: 3,
+                destination: 4,
+                gate_type: "BUF".to_string(),
+            },
         ];
         let delay_a = ta.critical_path_delay(&netlist, &[0], &[2]);
         let delay_b = ta.critical_path_delay(&netlist, &[0], &[4]);

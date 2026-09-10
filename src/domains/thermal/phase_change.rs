@@ -88,12 +88,11 @@ impl PhaseChange1D {
 
         for i in 1..(n - 1) {
             // Interpolate thermal conductivity based on liquid fraction
-            let k_left = self.k_solid
-                + (self.k_liquid - self.k_solid) * self.liquid_fraction[i - 1];
-            let k_right = self.k_solid
-                + (self.k_liquid - self.k_solid) * self.liquid_fraction[i + 1];
-            let k_center = self.k_solid
-                + (self.k_liquid - self.k_solid) * self.liquid_fraction[i];
+            let k_left =
+                self.k_solid + (self.k_liquid - self.k_solid) * self.liquid_fraction[i - 1];
+            let k_right =
+                self.k_solid + (self.k_liquid - self.k_solid) * self.liquid_fraction[i + 1];
+            let k_center = self.k_solid + (self.k_liquid - self.k_solid) * self.liquid_fraction[i];
 
             // Harmonic mean of conductivities at interfaces
             let k_east = 2.0 * k_center * k_right / (k_center + k_right + 1e-30);

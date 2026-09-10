@@ -58,10 +58,23 @@ impl ResonantCavity {
                 let b = self.dimensions.y.max(0.01);
                 let d = self.dimensions.z.max(0.01);
                 let k = 2.0 * std::f64::consts::PI * freq / c;
-                let rs = f64::sqrt(2.0 * std::f64::consts::PI * freq * 1.25663706212e-6 / (2.0 * self.wall_conductivity));
+                let rs = f64::sqrt(
+                    2.0 * std::f64::consts::PI * freq * 1.25663706212e-6
+                        / (2.0 * self.wall_conductivity),
+                );
                 let numerator = (k * a * b * d).powi(3) * 1.25663706212e-6 * c;
-                let denom = 2.0 * std::f64::consts::PI * std::f64::consts::PI * rs * (2.0 * b * (a * a + d * d) + a * d * (k * a).powi(2) + a * d * (k * d).powi(2));
-                if denom.abs() < 1e-30 { 1000.0 } else { numerator / denom }
+                let denom = 2.0
+                    * std::f64::consts::PI
+                    * std::f64::consts::PI
+                    * rs
+                    * (2.0 * b * (a * a + d * d)
+                        + a * d * (k * a).powi(2)
+                        + a * d * (k * d).powi(2));
+                if denom.abs() < 1e-30 {
+                    1000.0
+                } else {
+                    numerator / denom
+                }
             }
             CavityShape::Cylindrical => 1000.0,
         }
@@ -69,18 +82,25 @@ impl ResonantCavity {
 
     pub fn bandwidth(&self, q: Scalar) -> Scalar {
         let f0 = self.resonant_freq("TE101");
-        if q <= 0.0 { return 0.0; }
+        if q <= 0.0 {
+            return 0.0;
+        }
         f0 / q
     }
 }
 
 /// Cascade two 2-port S-parameter matrices.
-pub fn cascade_s2p(s1: [[Complex<Scalar>; 2]; 2], s2: [[Complex<Scalar>; 2]; 2]) -> [[Complex<Scalar>; 2]; 2] {
+pub fn cascade_s2p(
+    s1: [[Complex<Scalar>; 2]; 2],
+    s2: [[Complex<Scalar>; 2]; 2],
+) -> [[Complex<Scalar>; 2]; 2] {
     let det = Complex::new(1.0, 0.0) - s1[1][0] * s2[0][1];
     if det.norm() < 1e-30 {
         // Singular cascade (e.g., two through networks): return identity
-        return [[Complex::new(1.0, 0.0), Complex::new(0.0, 0.0)],
-                [Complex::new(0.0, 0.0), Complex::new(1.0, 0.0)]];
+        return [
+            [Complex::new(1.0, 0.0), Complex::new(0.0, 0.0)],
+            [Complex::new(0.0, 0.0), Complex::new(1.0, 0.0)],
+        ];
     }
     let s11 = s1[0][0] + s1[0][1] * s2[0][0] * s1[1][0] / det;
     let s12 = s1[0][1] * s2[1][1] / det;
@@ -112,7 +132,13 @@ impl RfAmplifier {
 }
 
 /// Transmission line resonator frequency.
-pub fn transmission_line_resonator(length: Scalar, _z0: Scalar, er: Scalar, n: u32, open_ended: bool) -> Scalar {
+pub fn transmission_line_resonator(
+    length: Scalar,
+    _z0: Scalar,
+    er: Scalar,
+    n: u32,
+    open_ended: bool,
+) -> Scalar {
     let c = 2.99792458e8;
     let vp = c / f64::sqrt(er);
     if open_ended {
@@ -178,7 +204,12 @@ mod tests {
 
     #[test]
     fn test_rf_amplifier_linear_gain() {
-        let amp = RfAmplifier { gain_db: 20.0, nf_db: 3.0, p1db: 10.0, oip3: 30.0 };
+        let amp = RfAmplifier {
+            gain_db: 20.0,
+            nf_db: 3.0,
+            p1db: 10.0,
+            oip3: 30.0,
+        };
         assert!((amp.linear_gain() - 10.0).abs() < 0.01);
     }
 

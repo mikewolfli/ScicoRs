@@ -58,16 +58,36 @@ impl LogicNand {
 }
 
 impl Block for LogicNand {
-    fn id(&self) -> &BlockId { &self.id }
-    fn block_type(&self) -> &str { &self.block_type }
-    fn ports(&self) -> &PortSet { &self.ports }
-    fn ports_mut(&mut self) -> &mut PortSet { &mut self.ports }
-    fn params(&self) -> &ParameterSet { &self.params }
-    fn params_mut(&mut self) -> &mut ParameterSet { &mut self.params }
-    fn status(&self) -> ComponentStatus { self.status }
-    fn set_status(&mut self, s: ComponentStatus) { self.status = s; }
-    fn set_time(&mut self, t: Time) { self.current_time = t; }
-    fn time(&self) -> Time { self.current_time }
+    fn id(&self) -> &BlockId {
+        &self.id
+    }
+    fn block_type(&self) -> &str {
+        &self.block_type
+    }
+    fn ports(&self) -> &PortSet {
+        &self.ports
+    }
+    fn ports_mut(&mut self) -> &mut PortSet {
+        &mut self.ports
+    }
+    fn params(&self) -> &ParameterSet {
+        &self.params
+    }
+    fn params_mut(&mut self) -> &mut ParameterSet {
+        &mut self.params
+    }
+    fn status(&self) -> ComponentStatus {
+        self.status
+    }
+    fn set_status(&mut self, s: ComponentStatus) {
+        self.status = s;
+    }
+    fn set_time(&mut self, t: Time) {
+        self.current_time = t;
+    }
+    fn time(&self) -> Time {
+        self.current_time
+    }
 
     fn init(&mut self) -> Result<(), SimError> {
         self.status = ComponentStatus::Ready;
@@ -75,19 +95,44 @@ impl Block for LogicNand {
     }
 
     fn output(&mut self) -> Result<(), SimError> {
-        let u1 = self.ports.get("u1").and_then(|p| p.read()).and_then(|s| s.as_scalar()).unwrap_or(0.0);
-        let u2 = self.ports.get("u2").and_then(|p| p.read()).and_then(|s| s.as_scalar()).unwrap_or(0.0);
+        let u1 = self
+            .ports
+            .get("u1")
+            .and_then(|p| p.read())
+            .and_then(|s| s.as_scalar())
+            .unwrap_or(0.0);
+        let u2 = self
+            .ports
+            .get("u2")
+            .and_then(|p| p.read())
+            .and_then(|s| s.as_scalar())
+            .unwrap_or(0.0);
         let y = from_bool(!(to_bool(u1) && to_bool(u2)));
         if let Some(port) = self.ports.get_mut("y") {
-            port.write(Signal::new(SignalType::Discrete, SignalValue::Scalar(y), self.current_time));
+            port.write(Signal::new(
+                SignalType::Discrete,
+                SignalValue::Scalar(y),
+                self.current_time,
+            ));
         }
         Ok(())
     }
-    fn derivative(&self) -> Result<Vec<Scalar>, SimError> { Ok(Vec::new()) }
-    fn update(&mut self) -> Result<(), SimError> { Ok(()) }
-    fn zero_crossings(&self) -> Vec<Scalar> { Vec::new() }
-    fn terminate(&mut self) -> Result<(), SimError> { self.status = ComponentStatus::Completed; Ok(()) }
-    fn clone_block(&self) -> Box<dyn Block> { Box::new(self.clone()) }
+    fn derivative(&self) -> Result<Vec<Scalar>, SimError> {
+        Ok(Vec::new())
+    }
+    fn update(&mut self) -> Result<(), SimError> {
+        Ok(())
+    }
+    fn zero_crossings(&self) -> Vec<Scalar> {
+        Vec::new()
+    }
+    fn terminate(&mut self) -> Result<(), SimError> {
+        self.status = ComponentStatus::Completed;
+        Ok(())
+    }
+    fn clone_block(&self) -> Box<dyn Block> {
+        Box::new(self.clone())
+    }
 }
 
 // ──────────────────────────────────────────────
@@ -123,16 +168,36 @@ impl LogicNor {
 }
 
 impl Block for LogicNor {
-    fn id(&self) -> &BlockId { &self.id }
-    fn block_type(&self) -> &str { &self.block_type }
-    fn ports(&self) -> &PortSet { &self.ports }
-    fn ports_mut(&mut self) -> &mut PortSet { &mut self.ports }
-    fn params(&self) -> &ParameterSet { &self.params }
-    fn params_mut(&mut self) -> &mut ParameterSet { &mut self.params }
-    fn status(&self) -> ComponentStatus { self.status }
-    fn set_status(&mut self, s: ComponentStatus) { self.status = s; }
-    fn set_time(&mut self, t: Time) { self.current_time = t; }
-    fn time(&self) -> Time { self.current_time }
+    fn id(&self) -> &BlockId {
+        &self.id
+    }
+    fn block_type(&self) -> &str {
+        &self.block_type
+    }
+    fn ports(&self) -> &PortSet {
+        &self.ports
+    }
+    fn ports_mut(&mut self) -> &mut PortSet {
+        &mut self.ports
+    }
+    fn params(&self) -> &ParameterSet {
+        &self.params
+    }
+    fn params_mut(&mut self) -> &mut ParameterSet {
+        &mut self.params
+    }
+    fn status(&self) -> ComponentStatus {
+        self.status
+    }
+    fn set_status(&mut self, s: ComponentStatus) {
+        self.status = s;
+    }
+    fn set_time(&mut self, t: Time) {
+        self.current_time = t;
+    }
+    fn time(&self) -> Time {
+        self.current_time
+    }
 
     fn init(&mut self) -> Result<(), SimError> {
         self.status = ComponentStatus::Ready;
@@ -140,19 +205,44 @@ impl Block for LogicNor {
     }
 
     fn output(&mut self) -> Result<(), SimError> {
-        let u1 = self.ports.get("u1").and_then(|p| p.read()).and_then(|s| s.as_scalar()).unwrap_or(0.0);
-        let u2 = self.ports.get("u2").and_then(|p| p.read()).and_then(|s| s.as_scalar()).unwrap_or(0.0);
+        let u1 = self
+            .ports
+            .get("u1")
+            .and_then(|p| p.read())
+            .and_then(|s| s.as_scalar())
+            .unwrap_or(0.0);
+        let u2 = self
+            .ports
+            .get("u2")
+            .and_then(|p| p.read())
+            .and_then(|s| s.as_scalar())
+            .unwrap_or(0.0);
         let y = from_bool(!(to_bool(u1) || to_bool(u2)));
         if let Some(port) = self.ports.get_mut("y") {
-            port.write(Signal::new(SignalType::Discrete, SignalValue::Scalar(y), self.current_time));
+            port.write(Signal::new(
+                SignalType::Discrete,
+                SignalValue::Scalar(y),
+                self.current_time,
+            ));
         }
         Ok(())
     }
-    fn derivative(&self) -> Result<Vec<Scalar>, SimError> { Ok(Vec::new()) }
-    fn update(&mut self) -> Result<(), SimError> { Ok(()) }
-    fn zero_crossings(&self) -> Vec<Scalar> { Vec::new() }
-    fn terminate(&mut self) -> Result<(), SimError> { self.status = ComponentStatus::Completed; Ok(()) }
-    fn clone_block(&self) -> Box<dyn Block> { Box::new(self.clone()) }
+    fn derivative(&self) -> Result<Vec<Scalar>, SimError> {
+        Ok(Vec::new())
+    }
+    fn update(&mut self) -> Result<(), SimError> {
+        Ok(())
+    }
+    fn zero_crossings(&self) -> Vec<Scalar> {
+        Vec::new()
+    }
+    fn terminate(&mut self) -> Result<(), SimError> {
+        self.status = ComponentStatus::Completed;
+        Ok(())
+    }
+    fn clone_block(&self) -> Box<dyn Block> {
+        Box::new(self.clone())
+    }
 }
 
 // ──────────────────────────────────────────────
@@ -188,16 +278,36 @@ impl LogicXnor {
 }
 
 impl Block for LogicXnor {
-    fn id(&self) -> &BlockId { &self.id }
-    fn block_type(&self) -> &str { &self.block_type }
-    fn ports(&self) -> &PortSet { &self.ports }
-    fn ports_mut(&mut self) -> &mut PortSet { &mut self.ports }
-    fn params(&self) -> &ParameterSet { &self.params }
-    fn params_mut(&mut self) -> &mut ParameterSet { &mut self.params }
-    fn status(&self) -> ComponentStatus { self.status }
-    fn set_status(&mut self, s: ComponentStatus) { self.status = s; }
-    fn set_time(&mut self, t: Time) { self.current_time = t; }
-    fn time(&self) -> Time { self.current_time }
+    fn id(&self) -> &BlockId {
+        &self.id
+    }
+    fn block_type(&self) -> &str {
+        &self.block_type
+    }
+    fn ports(&self) -> &PortSet {
+        &self.ports
+    }
+    fn ports_mut(&mut self) -> &mut PortSet {
+        &mut self.ports
+    }
+    fn params(&self) -> &ParameterSet {
+        &self.params
+    }
+    fn params_mut(&mut self) -> &mut ParameterSet {
+        &mut self.params
+    }
+    fn status(&self) -> ComponentStatus {
+        self.status
+    }
+    fn set_status(&mut self, s: ComponentStatus) {
+        self.status = s;
+    }
+    fn set_time(&mut self, t: Time) {
+        self.current_time = t;
+    }
+    fn time(&self) -> Time {
+        self.current_time
+    }
 
     fn init(&mut self) -> Result<(), SimError> {
         self.status = ComponentStatus::Ready;
@@ -205,19 +315,44 @@ impl Block for LogicXnor {
     }
 
     fn output(&mut self) -> Result<(), SimError> {
-        let u1 = self.ports.get("u1").and_then(|p| p.read()).and_then(|s| s.as_scalar()).unwrap_or(0.0);
-        let u2 = self.ports.get("u2").and_then(|p| p.read()).and_then(|s| s.as_scalar()).unwrap_or(0.0);
+        let u1 = self
+            .ports
+            .get("u1")
+            .and_then(|p| p.read())
+            .and_then(|s| s.as_scalar())
+            .unwrap_or(0.0);
+        let u2 = self
+            .ports
+            .get("u2")
+            .and_then(|p| p.read())
+            .and_then(|s| s.as_scalar())
+            .unwrap_or(0.0);
         let y = from_bool(to_bool(u1) == to_bool(u2));
         if let Some(port) = self.ports.get_mut("y") {
-            port.write(Signal::new(SignalType::Discrete, SignalValue::Scalar(y), self.current_time));
+            port.write(Signal::new(
+                SignalType::Discrete,
+                SignalValue::Scalar(y),
+                self.current_time,
+            ));
         }
         Ok(())
     }
-    fn derivative(&self) -> Result<Vec<Scalar>, SimError> { Ok(Vec::new()) }
-    fn update(&mut self) -> Result<(), SimError> { Ok(()) }
-    fn zero_crossings(&self) -> Vec<Scalar> { Vec::new() }
-    fn terminate(&mut self) -> Result<(), SimError> { self.status = ComponentStatus::Completed; Ok(()) }
-    fn clone_block(&self) -> Box<dyn Block> { Box::new(self.clone()) }
+    fn derivative(&self) -> Result<Vec<Scalar>, SimError> {
+        Ok(Vec::new())
+    }
+    fn update(&mut self) -> Result<(), SimError> {
+        Ok(())
+    }
+    fn zero_crossings(&self) -> Vec<Scalar> {
+        Vec::new()
+    }
+    fn terminate(&mut self) -> Result<(), SimError> {
+        self.status = ComponentStatus::Completed;
+        Ok(())
+    }
+    fn clone_block(&self) -> Box<dyn Block> {
+        Box::new(self.clone())
+    }
 }
 
 // ──────────────────────────────────────────────
@@ -252,16 +387,36 @@ impl LogicBuffer {
 }
 
 impl Block for LogicBuffer {
-    fn id(&self) -> &BlockId { &self.id }
-    fn block_type(&self) -> &str { &self.block_type }
-    fn ports(&self) -> &PortSet { &self.ports }
-    fn ports_mut(&mut self) -> &mut PortSet { &mut self.ports }
-    fn params(&self) -> &ParameterSet { &self.params }
-    fn params_mut(&mut self) -> &mut ParameterSet { &mut self.params }
-    fn status(&self) -> ComponentStatus { self.status }
-    fn set_status(&mut self, s: ComponentStatus) { self.status = s; }
-    fn set_time(&mut self, t: Time) { self.current_time = t; }
-    fn time(&self) -> Time { self.current_time }
+    fn id(&self) -> &BlockId {
+        &self.id
+    }
+    fn block_type(&self) -> &str {
+        &self.block_type
+    }
+    fn ports(&self) -> &PortSet {
+        &self.ports
+    }
+    fn ports_mut(&mut self) -> &mut PortSet {
+        &mut self.ports
+    }
+    fn params(&self) -> &ParameterSet {
+        &self.params
+    }
+    fn params_mut(&mut self) -> &mut ParameterSet {
+        &mut self.params
+    }
+    fn status(&self) -> ComponentStatus {
+        self.status
+    }
+    fn set_status(&mut self, s: ComponentStatus) {
+        self.status = s;
+    }
+    fn set_time(&mut self, t: Time) {
+        self.current_time = t;
+    }
+    fn time(&self) -> Time {
+        self.current_time
+    }
 
     fn init(&mut self) -> Result<(), SimError> {
         self.status = ComponentStatus::Ready;
@@ -269,17 +424,37 @@ impl Block for LogicBuffer {
     }
 
     fn output(&mut self) -> Result<(), SimError> {
-        let u = self.ports.get("u").and_then(|p| p.read()).and_then(|s| s.as_scalar()).unwrap_or(0.0);
+        let u = self
+            .ports
+            .get("u")
+            .and_then(|p| p.read())
+            .and_then(|s| s.as_scalar())
+            .unwrap_or(0.0);
         if let Some(port) = self.ports.get_mut("y") {
-            port.write(Signal::new(SignalType::Discrete, SignalValue::Scalar(u), self.current_time));
+            port.write(Signal::new(
+                SignalType::Discrete,
+                SignalValue::Scalar(u),
+                self.current_time,
+            ));
         }
         Ok(())
     }
-    fn derivative(&self) -> Result<Vec<Scalar>, SimError> { Ok(Vec::new()) }
-    fn update(&mut self) -> Result<(), SimError> { Ok(()) }
-    fn zero_crossings(&self) -> Vec<Scalar> { Vec::new() }
-    fn terminate(&mut self) -> Result<(), SimError> { self.status = ComponentStatus::Completed; Ok(()) }
-    fn clone_block(&self) -> Box<dyn Block> { Box::new(self.clone()) }
+    fn derivative(&self) -> Result<Vec<Scalar>, SimError> {
+        Ok(Vec::new())
+    }
+    fn update(&mut self) -> Result<(), SimError> {
+        Ok(())
+    }
+    fn zero_crossings(&self) -> Vec<Scalar> {
+        Vec::new()
+    }
+    fn terminate(&mut self) -> Result<(), SimError> {
+        self.status = ComponentStatus::Completed;
+        Ok(())
+    }
+    fn clone_block(&self) -> Box<dyn Block> {
+        Box::new(self.clone())
+    }
 }
 
 // ──────────────────────────────────────────────
@@ -317,16 +492,36 @@ impl TriStateBuffer {
 }
 
 impl Block for TriStateBuffer {
-    fn id(&self) -> &BlockId { &self.id }
-    fn block_type(&self) -> &str { &self.block_type }
-    fn ports(&self) -> &PortSet { &self.ports }
-    fn ports_mut(&mut self) -> &mut PortSet { &mut self.ports }
-    fn params(&self) -> &ParameterSet { &self.params }
-    fn params_mut(&mut self) -> &mut ParameterSet { &mut self.params }
-    fn status(&self) -> ComponentStatus { self.status }
-    fn set_status(&mut self, s: ComponentStatus) { self.status = s; }
-    fn set_time(&mut self, t: Time) { self.current_time = t; }
-    fn time(&self) -> Time { self.current_time }
+    fn id(&self) -> &BlockId {
+        &self.id
+    }
+    fn block_type(&self) -> &str {
+        &self.block_type
+    }
+    fn ports(&self) -> &PortSet {
+        &self.ports
+    }
+    fn ports_mut(&mut self) -> &mut PortSet {
+        &mut self.ports
+    }
+    fn params(&self) -> &ParameterSet {
+        &self.params
+    }
+    fn params_mut(&mut self) -> &mut ParameterSet {
+        &mut self.params
+    }
+    fn status(&self) -> ComponentStatus {
+        self.status
+    }
+    fn set_status(&mut self, s: ComponentStatus) {
+        self.status = s;
+    }
+    fn set_time(&mut self, t: Time) {
+        self.current_time = t;
+    }
+    fn time(&self) -> Time {
+        self.current_time
+    }
 
     fn init(&mut self) -> Result<(), SimError> {
         self.status = ComponentStatus::Ready;
@@ -334,19 +529,44 @@ impl Block for TriStateBuffer {
     }
 
     fn output(&mut self) -> Result<(), SimError> {
-        let u = self.ports.get("u").and_then(|p| p.read()).and_then(|s| s.as_scalar()).unwrap_or(0.0);
-        let en = self.ports.get("en").and_then(|p| p.read()).and_then(|s| s.as_scalar()).unwrap_or(0.0);
+        let u = self
+            .ports
+            .get("u")
+            .and_then(|p| p.read())
+            .and_then(|s| s.as_scalar())
+            .unwrap_or(0.0);
+        let en = self
+            .ports
+            .get("en")
+            .and_then(|p| p.read())
+            .and_then(|s| s.as_scalar())
+            .unwrap_or(0.0);
         let y = if to_bool(en) { u } else { 0.5 }; // High-Z → midpoint
         if let Some(port) = self.ports.get_mut("y") {
-            port.write(Signal::new(SignalType::Discrete, SignalValue::Scalar(y), self.current_time));
+            port.write(Signal::new(
+                SignalType::Discrete,
+                SignalValue::Scalar(y),
+                self.current_time,
+            ));
         }
         Ok(())
     }
-    fn derivative(&self) -> Result<Vec<Scalar>, SimError> { Ok(Vec::new()) }
-    fn update(&mut self) -> Result<(), SimError> { Ok(()) }
-    fn zero_crossings(&self) -> Vec<Scalar> { Vec::new() }
-    fn terminate(&mut self) -> Result<(), SimError> { self.status = ComponentStatus::Completed; Ok(()) }
-    fn clone_block(&self) -> Box<dyn Block> { Box::new(self.clone()) }
+    fn derivative(&self) -> Result<Vec<Scalar>, SimError> {
+        Ok(Vec::new())
+    }
+    fn update(&mut self) -> Result<(), SimError> {
+        Ok(())
+    }
+    fn zero_crossings(&self) -> Vec<Scalar> {
+        Vec::new()
+    }
+    fn terminate(&mut self) -> Result<(), SimError> {
+        self.status = ComponentStatus::Completed;
+        Ok(())
+    }
+    fn clone_block(&self) -> Box<dyn Block> {
+        Box::new(self.clone())
+    }
 }
 
 // ──────────────────────────────────────────────
@@ -381,16 +601,36 @@ impl LogicNotBlock {
 }
 
 impl Block for LogicNotBlock {
-    fn id(&self) -> &BlockId { &self.id }
-    fn block_type(&self) -> &str { &self.block_type }
-    fn ports(&self) -> &PortSet { &self.ports }
-    fn ports_mut(&mut self) -> &mut PortSet { &mut self.ports }
-    fn params(&self) -> &ParameterSet { &self.params }
-    fn params_mut(&mut self) -> &mut ParameterSet { &mut self.params }
-    fn status(&self) -> ComponentStatus { self.status }
-    fn set_status(&mut self, s: ComponentStatus) { self.status = s; }
-    fn set_time(&mut self, t: Time) { self.current_time = t; }
-    fn time(&self) -> Time { self.current_time }
+    fn id(&self) -> &BlockId {
+        &self.id
+    }
+    fn block_type(&self) -> &str {
+        &self.block_type
+    }
+    fn ports(&self) -> &PortSet {
+        &self.ports
+    }
+    fn ports_mut(&mut self) -> &mut PortSet {
+        &mut self.ports
+    }
+    fn params(&self) -> &ParameterSet {
+        &self.params
+    }
+    fn params_mut(&mut self) -> &mut ParameterSet {
+        &mut self.params
+    }
+    fn status(&self) -> ComponentStatus {
+        self.status
+    }
+    fn set_status(&mut self, s: ComponentStatus) {
+        self.status = s;
+    }
+    fn set_time(&mut self, t: Time) {
+        self.current_time = t;
+    }
+    fn time(&self) -> Time {
+        self.current_time
+    }
 
     fn init(&mut self) -> Result<(), SimError> {
         self.status = ComponentStatus::Ready;
@@ -398,18 +638,38 @@ impl Block for LogicNotBlock {
     }
 
     fn output(&mut self) -> Result<(), SimError> {
-        let u = self.ports.get("u").and_then(|p| p.read()).and_then(|s| s.as_scalar()).unwrap_or(0.0);
+        let u = self
+            .ports
+            .get("u")
+            .and_then(|p| p.read())
+            .and_then(|s| s.as_scalar())
+            .unwrap_or(0.0);
         let y = from_bool(!to_bool(u));
         if let Some(port) = self.ports.get_mut("y") {
-            port.write(Signal::new(SignalType::Discrete, SignalValue::Scalar(y), self.current_time));
+            port.write(Signal::new(
+                SignalType::Discrete,
+                SignalValue::Scalar(y),
+                self.current_time,
+            ));
         }
         Ok(())
     }
-    fn derivative(&self) -> Result<Vec<Scalar>, SimError> { Ok(Vec::new()) }
-    fn update(&mut self) -> Result<(), SimError> { Ok(()) }
-    fn zero_crossings(&self) -> Vec<Scalar> { Vec::new() }
-    fn terminate(&mut self) -> Result<(), SimError> { self.status = ComponentStatus::Completed; Ok(()) }
-    fn clone_block(&self) -> Box<dyn Block> { Box::new(self.clone()) }
+    fn derivative(&self) -> Result<Vec<Scalar>, SimError> {
+        Ok(Vec::new())
+    }
+    fn update(&mut self) -> Result<(), SimError> {
+        Ok(())
+    }
+    fn zero_crossings(&self) -> Vec<Scalar> {
+        Vec::new()
+    }
+    fn terminate(&mut self) -> Result<(), SimError> {
+        self.status = ComponentStatus::Completed;
+        Ok(())
+    }
+    fn clone_block(&self) -> Box<dyn Block> {
+        Box::new(self.clone())
+    }
 }
 
 #[cfg(test)]
@@ -421,17 +681,42 @@ mod tests {
         let mut gate = LogicNand::new("nand1");
         gate.init().unwrap();
         // Test all 4 combinations by writing directly to port
-        let test_cases = [(0.0, 0.0, 1.0), (0.0, 1.0, 1.0), (1.0, 0.0, 1.0), (1.0, 1.0, 0.0)];
+        let test_cases = [
+            (0.0, 0.0, 1.0),
+            (0.0, 1.0, 1.0),
+            (1.0, 0.0, 1.0),
+            (1.0, 1.0, 0.0),
+        ];
         for (u1, u2, expected) in &test_cases {
             if let Some(port) = gate.ports_mut().get_mut("u1") {
-                port.write(Signal::new(SignalType::Discrete, SignalValue::Scalar(*u1), 0.0));
+                port.write(Signal::new(
+                    SignalType::Discrete,
+                    SignalValue::Scalar(*u1),
+                    0.0,
+                ));
             }
             if let Some(port) = gate.ports_mut().get_mut("u2") {
-                port.write(Signal::new(SignalType::Discrete, SignalValue::Scalar(*u2), 0.0));
+                port.write(Signal::new(
+                    SignalType::Discrete,
+                    SignalValue::Scalar(*u2),
+                    0.0,
+                ));
             }
             gate.output().unwrap();
-            let result = gate.ports().get("y").and_then(|p| p.read()).and_then(|s| s.as_scalar()).unwrap_or(0.0);
-            assert!((result - expected).abs() < 0.01, "NAND({},{}) = {}, expected {}", u1, u2, result, expected);
+            let result = gate
+                .ports()
+                .get("y")
+                .and_then(|p| p.read())
+                .and_then(|s| s.as_scalar())
+                .unwrap_or(0.0);
+            assert!(
+                (result - expected).abs() < 0.01,
+                "NAND({},{}) = {}, expected {}",
+                u1,
+                u2,
+                result,
+                expected
+            );
         }
     }
 
@@ -439,16 +724,34 @@ mod tests {
     fn test_nor_truth_table() {
         let mut gate = LogicNor::new("nor1");
         gate.init().unwrap();
-        let test_cases = [(0.0, 0.0, 1.0), (0.0, 1.0, 0.0), (1.0, 0.0, 0.0), (1.0, 1.0, 0.0)];
+        let test_cases = [
+            (0.0, 0.0, 1.0),
+            (0.0, 1.0, 0.0),
+            (1.0, 0.0, 0.0),
+            (1.0, 1.0, 0.0),
+        ];
         for (u1, u2, expected) in &test_cases {
             if let Some(port) = gate.ports_mut().get_mut("u1") {
-                port.write(Signal::new(SignalType::Discrete, SignalValue::Scalar(*u1), 0.0));
+                port.write(Signal::new(
+                    SignalType::Discrete,
+                    SignalValue::Scalar(*u1),
+                    0.0,
+                ));
             }
             if let Some(port) = gate.ports_mut().get_mut("u2") {
-                port.write(Signal::new(SignalType::Discrete, SignalValue::Scalar(*u2), 0.0));
+                port.write(Signal::new(
+                    SignalType::Discrete,
+                    SignalValue::Scalar(*u2),
+                    0.0,
+                ));
             }
             gate.output().unwrap();
-            let result = gate.ports().get("y").and_then(|p| p.read()).and_then(|s| s.as_scalar()).unwrap_or(0.0);
+            let result = gate
+                .ports()
+                .get("y")
+                .and_then(|p| p.read())
+                .and_then(|s| s.as_scalar())
+                .unwrap_or(0.0);
             assert!((result - expected).abs() < 0.01);
         }
     }
@@ -457,16 +760,34 @@ mod tests {
     fn test_xnor_truth_table() {
         let mut gate = LogicXnor::new("xnor1");
         gate.init().unwrap();
-        let test_cases = [(0.0, 0.0, 1.0), (0.0, 1.0, 0.0), (1.0, 0.0, 0.0), (1.0, 1.0, 1.0)];
+        let test_cases = [
+            (0.0, 0.0, 1.0),
+            (0.0, 1.0, 0.0),
+            (1.0, 0.0, 0.0),
+            (1.0, 1.0, 1.0),
+        ];
         for (u1, u2, expected) in &test_cases {
             if let Some(port) = gate.ports_mut().get_mut("u1") {
-                port.write(Signal::new(SignalType::Discrete, SignalValue::Scalar(*u1), 0.0));
+                port.write(Signal::new(
+                    SignalType::Discrete,
+                    SignalValue::Scalar(*u1),
+                    0.0,
+                ));
             }
             if let Some(port) = gate.ports_mut().get_mut("u2") {
-                port.write(Signal::new(SignalType::Discrete, SignalValue::Scalar(*u2), 0.0));
+                port.write(Signal::new(
+                    SignalType::Discrete,
+                    SignalValue::Scalar(*u2),
+                    0.0,
+                ));
             }
             gate.output().unwrap();
-            let result = gate.ports().get("y").and_then(|p| p.read()).and_then(|s| s.as_scalar()).unwrap_or(0.0);
+            let result = gate
+                .ports()
+                .get("y")
+                .and_then(|p| p.read())
+                .and_then(|s| s.as_scalar())
+                .unwrap_or(0.0);
             assert!((result - expected).abs() < 0.01);
         }
     }
@@ -476,10 +797,19 @@ mod tests {
         let mut buf = LogicBuffer::new("buf1");
         buf.init().unwrap();
         if let Some(port) = buf.ports_mut().get_mut("u") {
-            port.write(Signal::new(SignalType::Discrete, SignalValue::Scalar(0.7), 0.0));
+            port.write(Signal::new(
+                SignalType::Discrete,
+                SignalValue::Scalar(0.7),
+                0.0,
+            ));
         }
         buf.output().unwrap();
-        let y = buf.ports().get("y").and_then(|p| p.read()).and_then(|s| s.as_scalar()).unwrap_or(0.0);
+        let y = buf
+            .ports()
+            .get("y")
+            .and_then(|p| p.read())
+            .and_then(|s| s.as_scalar())
+            .unwrap_or(0.0);
         assert!((y - 0.7).abs() < 0.01);
     }
 
@@ -488,13 +818,26 @@ mod tests {
         let mut buf = TriStateBuffer::new("tris1");
         buf.init().unwrap();
         if let Some(port) = buf.ports_mut().get_mut("u") {
-            port.write(Signal::new(SignalType::Discrete, SignalValue::Scalar(1.0), 0.0));
+            port.write(Signal::new(
+                SignalType::Discrete,
+                SignalValue::Scalar(1.0),
+                0.0,
+            ));
         }
         if let Some(port) = buf.ports_mut().get_mut("en") {
-            port.write(Signal::new(SignalType::Discrete, SignalValue::Scalar(1.0), 0.0));
+            port.write(Signal::new(
+                SignalType::Discrete,
+                SignalValue::Scalar(1.0),
+                0.0,
+            ));
         }
         buf.output().unwrap();
-        let y = buf.ports().get("y").and_then(|p| p.read()).and_then(|s| s.as_scalar()).unwrap_or(0.0);
+        let y = buf
+            .ports()
+            .get("y")
+            .and_then(|p| p.read())
+            .and_then(|s| s.as_scalar())
+            .unwrap_or(0.0);
         assert!((y - 1.0).abs() < 0.01);
     }
 
@@ -503,13 +846,26 @@ mod tests {
         let mut buf = TriStateBuffer::new("tris1");
         buf.init().unwrap();
         if let Some(port) = buf.ports_mut().get_mut("u") {
-            port.write(Signal::new(SignalType::Discrete, SignalValue::Scalar(1.0), 0.0));
+            port.write(Signal::new(
+                SignalType::Discrete,
+                SignalValue::Scalar(1.0),
+                0.0,
+            ));
         }
         if let Some(port) = buf.ports_mut().get_mut("en") {
-            port.write(Signal::new(SignalType::Discrete, SignalValue::Scalar(0.0), 0.0));
+            port.write(Signal::new(
+                SignalType::Discrete,
+                SignalValue::Scalar(0.0),
+                0.0,
+            ));
         }
         buf.output().unwrap();
-        let y = buf.ports().get("y").and_then(|p| p.read()).and_then(|s| s.as_scalar()).unwrap_or(0.0);
+        let y = buf
+            .ports()
+            .get("y")
+            .and_then(|p| p.read())
+            .and_then(|s| s.as_scalar())
+            .unwrap_or(0.0);
         assert!((y - 0.5).abs() < 0.01); // High-Z → midpoint
     }
 
@@ -518,17 +874,35 @@ mod tests {
         let mut gate = LogicNotBlock::new("not1");
         gate.init().unwrap();
         if let Some(port) = gate.ports_mut().get_mut("u") {
-            port.write(Signal::new(SignalType::Discrete, SignalValue::Scalar(1.0), 0.0));
+            port.write(Signal::new(
+                SignalType::Discrete,
+                SignalValue::Scalar(1.0),
+                0.0,
+            ));
         }
         gate.output().unwrap();
-        let y = gate.ports().get("y").and_then(|p| p.read()).and_then(|s| s.as_scalar()).unwrap_or(0.0);
+        let y = gate
+            .ports()
+            .get("y")
+            .and_then(|p| p.read())
+            .and_then(|s| s.as_scalar())
+            .unwrap_or(0.0);
         assert!((y - 0.0).abs() < 0.01);
 
         if let Some(port) = gate.ports_mut().get_mut("u") {
-            port.write(Signal::new(SignalType::Discrete, SignalValue::Scalar(0.0), 0.0));
+            port.write(Signal::new(
+                SignalType::Discrete,
+                SignalValue::Scalar(0.0),
+                0.0,
+            ));
         }
         gate.output().unwrap();
-        let y = gate.ports().get("y").and_then(|p| p.read()).and_then(|s| s.as_scalar()).unwrap_or(0.0);
+        let y = gate
+            .ports()
+            .get("y")
+            .and_then(|p| p.read())
+            .and_then(|s| s.as_scalar())
+            .unwrap_or(0.0);
         assert!((y - 1.0).abs() < 0.01);
     }
 

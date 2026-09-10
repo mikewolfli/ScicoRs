@@ -117,7 +117,9 @@ impl NavierStokes2D {
         // --- Intermediate u* (interior: i = 1..ny-1, j = 1..nx-1) ---
         use rayon::prelude::*;
         u_star.par_iter_mut().enumerate().for_each(|(i, row)| {
-            if i == 0 || i >= self.ny { return; }
+            if i == 0 || i >= self.ny {
+                return;
+            }
             for j in 1..self.nx - 1 {
                 let u_ij = self.u[i][j];
                 let u_adv_x = if u_ij > 0.0 {
@@ -141,7 +143,9 @@ impl NavierStokes2D {
 
         // --- Intermediate v* (interior: i = 1..ny-1, j = 1..nx-1) ---
         v_star.par_iter_mut().enumerate().for_each(|(i, row)| {
-            if i == 0 || i >= self.ny - 1 { return; }
+            if i == 0 || i >= self.ny - 1 {
+                return;
+            }
             for j in 1..self.nx {
                 let v_ij = self.v[i][j];
                 let u_avg = 0.25
@@ -188,22 +192,32 @@ impl NavierStokes2D {
 
         for _iter in 0..max_iter {
             use rayon::prelude::*;
-            let max_diff_local = p_new.par_iter_mut().enumerate().map(|(i, row)| {
-                if i == 0 || i == ny - 1 { return 0.0; }
-                let mut local_max = 0.0;
-                for j in 1..nx - 1 {
-                    let div_u = (u_star[i][j + 1] - u_star[i][j]) / dx
-                        + (v_star[i + 1][j] - v_star[i][j]) / dy;
-                    let rhs = div_u / dt;
-                    let p_new_val = ((self.p[i + 1][j] + self.p[i - 1][j]) * dy2
-                        + (self.p[i][j + 1] + self.p[i][j - 1]) * dx2
-                        - rhs * dx2 * dy2) / denom;
-                    row[j] = p_new_val;
-                    let diff = (p_new_val - self.p[i][j]).abs();
-                    if diff > local_max { local_max = diff; }
-                }
-                local_max
-            }).max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap_or(0.0);
+            let max_diff_local = p_new
+                .par_iter_mut()
+                .enumerate()
+                .map(|(i, row)| {
+                    if i == 0 || i == ny - 1 {
+                        return 0.0;
+                    }
+                    let mut local_max = 0.0;
+                    for j in 1..nx - 1 {
+                        let div_u = (u_star[i][j + 1] - u_star[i][j]) / dx
+                            + (v_star[i + 1][j] - v_star[i][j]) / dy;
+                        let rhs = div_u / dt;
+                        let p_new_val = ((self.p[i + 1][j] + self.p[i - 1][j]) * dy2
+                            + (self.p[i][j + 1] + self.p[i][j - 1]) * dx2
+                            - rhs * dx2 * dy2)
+                            / denom;
+                        row[j] = p_new_val;
+                        let diff = (p_new_val - self.p[i][j]).abs();
+                        if diff > local_max {
+                            local_max = diff;
+                        }
+                    }
+                    local_max
+                })
+                .max_by(|a, b| a.partial_cmp(b).unwrap())
+                .unwrap_or(0.0);
 
             // Copy interior + set Neumann BC
             for i in 0..ny {

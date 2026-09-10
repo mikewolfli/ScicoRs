@@ -8,7 +8,9 @@ use crate::core::error::SimError;
 use crate::core::param::ParameterSet;
 use crate::core::port::{Port, PortSet};
 
-use crate::core::types::{ComponentStatus, PortDirection as PD, Scalar, SignalType, Time};
+use crate::core::types::{
+    ComponentStatus, PortDirection as PD, Scalar, SignalType, SignalValue, Time,
+};
 
 // ──────────────────────────────────────────────
 // Scope
@@ -150,6 +152,26 @@ impl Block for Scope {
     fn clone_block(&self) -> Box<dyn Block> {
         Box::new(self.clone())
     }
+
+    /// Capacity bounds how much history is retained, so it must survive a save.
+    fn configuration(&self) -> Vec<crate::core::param::Parameter> {
+        vec![crate::core::param::Parameter::new_config(
+            "capacity",
+            SignalValue::Scalar(self.capacity as Scalar),
+            "scope buffer capacity",
+        )]
+    }
+    fn apply_configuration(&mut self, params: &[crate::core::param::Parameter]) -> usize {
+        for p in params {
+            if let ("capacity", SignalValue::Scalar(v)) = (p.name.as_str(), &p.value)
+                && *v >= 1.0
+            {
+                self.capacity = *v as usize;
+                return 1;
+            }
+        }
+        0
+    }
 }
 
 // ──────────────────────────────────────────────
@@ -258,6 +280,24 @@ impl Block for DataRecorder {
     fn clone_block(&self) -> Box<dyn Block> {
         Box::new(self.clone())
     }
+
+    /// The record cap bounds memory growth, so it must survive a save.
+    fn configuration(&self) -> Vec<crate::core::param::Parameter> {
+        vec![crate::core::param::Parameter::new_config(
+            "max_records",
+            SignalValue::Integer(self.max_records.map(|v| v as i64).unwrap_or(-1)),
+            "record cap (-1 = unlimited)",
+        )]
+    }
+    fn apply_configuration(&mut self, params: &[crate::core::param::Parameter]) -> usize {
+        for p in params {
+            if let ("max_records", SignalValue::Integer(v)) = (p.name.as_str(), &p.value) {
+                self.max_records = if *v < 0 { None } else { Some(*v as usize) };
+                return 1;
+            }
+        }
+        0
+    }
 }
 
 // ──────────────────────────────────────────────
@@ -362,6 +402,24 @@ impl Block for NumericDisplay {
     }
     fn clone_block(&self) -> Box<dyn Block> {
         Box::new(self.clone())
+    }
+
+    /// The display prefix is part of the block's configuration.
+    fn configuration(&self) -> Vec<crate::core::param::Parameter> {
+        vec![crate::core::param::Parameter::new_config(
+            "prefix",
+            SignalValue::String(self.prefix.clone()),
+            "display prefix",
+        )]
+    }
+    fn apply_configuration(&mut self, params: &[crate::core::param::Parameter]) -> usize {
+        for p in params {
+            if let ("prefix", SignalValue::String(v)) = (p.name.as_str(), &p.value) {
+                self.prefix = v.clone();
+                return 1;
+            }
+        }
+        0
     }
 }
 
@@ -479,6 +537,26 @@ impl Block for ChartBuffer {
     }
     fn clone_block(&self) -> Box<dyn Block> {
         Box::new(self.clone())
+    }
+
+    /// The point cap bounds memory growth, so it must survive a save.
+    fn configuration(&self) -> Vec<crate::core::param::Parameter> {
+        vec![crate::core::param::Parameter::new_config(
+            "max_points",
+            SignalValue::Scalar(self.max_points as Scalar),
+            "chart point cap",
+        )]
+    }
+    fn apply_configuration(&mut self, params: &[crate::core::param::Parameter]) -> usize {
+        for p in params {
+            if let ("max_points", SignalValue::Scalar(v)) = (p.name.as_str(), &p.value)
+                && *v >= 1.0
+            {
+                self.max_points = *v as usize;
+                return 1;
+            }
+        }
+        0
     }
 }
 

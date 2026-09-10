@@ -216,8 +216,18 @@ pub struct Unit {
 
 impl Unit {
     /// Create a new unit.
-    pub const fn new(dimension: Dimension, scale: Scalar, offset: Scalar, symbol: &'static str) -> Self {
-        Self { dimension, scale, offset, symbol }
+    pub const fn new(
+        dimension: Dimension,
+        scale: Scalar,
+        offset: Scalar,
+        symbol: &'static str,
+    ) -> Self {
+        Self {
+            dimension,
+            scale,
+            offset,
+            symbol,
+        }
     }
 
     /// Create a coherent SI unit (scale=1, offset=0).
@@ -389,8 +399,8 @@ impl Quantity {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::si_units::*;
+    use super::*;
 
     #[test]
     fn test_dimension_operations() {

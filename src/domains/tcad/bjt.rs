@@ -157,20 +157,12 @@ pub fn bjt_emitter_current(ic: Scalar, ib: Scalar) -> Scalar {
 
 /// Small-signal transconductance: gm = Ic / Vt.
 pub fn bjt_gm(ic: Scalar, vt: Scalar) -> Scalar {
-    if vt > 0.0 {
-        ic / vt
-    } else {
-        0.0
-    }
+    if vt > 0.0 { ic / vt } else { 0.0 }
 }
 
 /// Small-signal base-emitter resistance: rπ = β / gm.
 pub fn bjt_rpi(beta: Scalar, gm: Scalar) -> Scalar {
-    if gm > 0.0 {
-        beta / gm
-    } else {
-        1e12
-    }
+    if gm > 0.0 { beta / gm } else { 1e12 }
 }
 
 // ──────────────────────────────────────────────

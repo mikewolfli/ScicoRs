@@ -465,13 +465,22 @@ mod tests {
     #[test]
     fn test_truss_stiffness_symmetry() {
         let mat = steel_structural();
-        let truss = TrussElement { length: 2.0, area: 0.01, material: mat };
+        let truss = TrussElement {
+            length: 2.0,
+            area: 0.01,
+            material: mat,
+        };
         let k = truss.stiffness_matrix();
         assert_eq!(k.len(), 4);
         assert_eq!(k[0].len(), 4);
         for i in 0..4 {
             for j in 0..4 {
-                assert!((k[i][j] - k[j][i]).abs() < 1e-12, "K not symmetric at ({},{})", i, j);
+                assert!(
+                    (k[i][j] - k[j][i]).abs() < 1e-12,
+                    "K not symmetric at ({},{})",
+                    i,
+                    j
+                );
             }
         }
     }
@@ -482,7 +491,11 @@ mod tests {
         let e = mat.young_modulus;
         let a = 0.01;
         let l = 2.0;
-        let truss = TrussElement { length: l, area: a, material: mat };
+        let truss = TrussElement {
+            length: l,
+            area: a,
+            material: mat,
+        };
         let k = truss.stiffness_matrix();
         let expected = e * a / l;
         assert!((k[0][0] - expected).abs() < 1.0);
@@ -493,14 +506,23 @@ mod tests {
     fn test_beam_stiffness_symmetry() {
         let mat = steel_structural();
         let beam = BeamElement {
-            length: 3.0, area: 0.02, i_y: 1e-4, i_z: 2e-4, j: 1e-4,
+            length: 3.0,
+            area: 0.02,
+            i_y: 1e-4,
+            i_z: 2e-4,
+            j: 1e-4,
             material: mat,
         };
         let k = beam.stiffness_matrix();
         assert_eq!(k.len(), 12);
         for i in 0..12 {
             for j in 0..12 {
-                assert!((k[i][j] - k[j][i]).abs() < 1e-8, "K not symmetric at ({},{})", i, j);
+                assert!(
+                    (k[i][j] - k[j][i]).abs() < 1e-8,
+                    "K not symmetric at ({},{})",
+                    i,
+                    j
+                );
             }
         }
     }
@@ -509,7 +531,11 @@ mod tests {
     fn test_beam_axial_term() {
         let mat = steel_structural();
         let beam = BeamElement {
-            length: 2.0, area: 0.01, i_y: 1e-5, i_z: 1e-5, j: 1e-5,
+            length: 2.0,
+            area: 0.01,
+            i_y: 1e-5,
+            i_z: 1e-5,
+            j: 1e-5,
             material: mat,
         };
         let k = beam.stiffness_matrix();
@@ -522,7 +548,11 @@ mod tests {
     fn test_beam_mass_matrix_size() {
         let mat = steel_structural();
         let beam = BeamElement {
-            length: 2.0, area: 0.01, i_y: 1e-5, i_z: 1e-5, j: 1e-5,
+            length: 2.0,
+            area: 0.01,
+            i_y: 1e-5,
+            i_z: 1e-5,
+            j: 1e-5,
             material: mat,
         };
         let m = beam.mass_matrix();
@@ -533,8 +563,12 @@ mod tests {
     #[test]
     fn test_shell_bending_stiffness() {
         let shell = ShellElement {
-            length: 0.5, width: 0.5, thickness: 0.01,
-            e: 200.0e9, nu: 0.3, rho: 7850.0,
+            length: 0.5,
+            width: 0.5,
+            thickness: 0.01,
+            e: 200.0e9,
+            nu: 0.3,
+            rho: 7850.0,
         };
         let d = shell.bending_stiffness();
         let expected = 200.0e9 * (0.01_f64).powi(3) / (12.0 * (1.0 - 0.09));
@@ -544,8 +578,12 @@ mod tests {
     #[test]
     fn test_shell_stiffness_size() {
         let shell = ShellElement {
-            length: 0.5, width: 0.5, thickness: 0.01,
-            e: 200.0e9, nu: 0.3, rho: 7850.0,
+            length: 0.5,
+            width: 0.5,
+            thickness: 0.01,
+            e: 200.0e9,
+            nu: 0.3,
+            rho: 7850.0,
         };
         let k = shell.stiffness_matrix();
         assert_eq!(k.len(), 24);
@@ -555,8 +593,12 @@ mod tests {
     #[test]
     fn test_solid_stiffness_size() {
         let solid = SolidElement {
-            dx: 0.1, dy: 0.1, dz: 0.1,
-            e: 200.0e9, nu: 0.3, rho: 7850.0,
+            dx: 0.1,
+            dy: 0.1,
+            dz: 0.1,
+            e: 200.0e9,
+            nu: 0.3,
+            rho: 7850.0,
         };
         let k = solid.stiffness_matrix();
         assert_eq!(k.len(), 24);
@@ -566,8 +608,12 @@ mod tests {
     #[test]
     fn test_solid_mass_matrix() {
         let solid = SolidElement {
-            dx: 0.2, dy: 0.2, dz: 0.2,
-            e: 200.0e9, nu: 0.3, rho: 7850.0,
+            dx: 0.2,
+            dy: 0.2,
+            dz: 0.2,
+            e: 200.0e9,
+            nu: 0.3,
+            rho: 7850.0,
         };
         let m = solid.mass_matrix();
         let nodal_mass = 7850.0 * 0.008 / 8.0;

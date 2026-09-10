@@ -22,7 +22,11 @@ pub fn rocket_thrust(
 /// Characteristic velocity c* (m/s), a measure of combustion chamber performance.
 ///
 /// c* = p_c · A_t / ṁ
-pub fn characteristic_velocity(chamber_pressure: Scalar, throat_area: Scalar, mass_flow: Scalar) -> Scalar {
+pub fn characteristic_velocity(
+    chamber_pressure: Scalar,
+    throat_area: Scalar,
+    mass_flow: Scalar,
+) -> Scalar {
     if mass_flow <= 0.0 {
         return 0.0;
     }

@@ -5,7 +5,7 @@
 
 use crate::core::block::{Block, BlockId};
 use crate::core::error::SimError;
-use crate::core::param::ParameterSet;
+use crate::core::param::{Parameter, ParameterSet};
 use crate::core::port::{Port, PortSet};
 use crate::core::signal::Signal;
 use crate::core::types::{
@@ -111,6 +111,26 @@ impl Block for ConstantSource {
     }
     fn clone_block(&self) -> Box<dyn Block> {
         Box::new(self.clone())
+    }
+
+    /// The emitted value is a `SignalValue`, not a scalar, so it is serialized
+    /// through the typed field rather than the scalar helper.
+    fn configuration(&self) -> Vec<Parameter> {
+        vec![Parameter::new_tunable(
+            "value",
+            self.value.clone(),
+            "constant output value",
+        )]
+    }
+    fn apply_configuration(&mut self, params: &[Parameter]) -> usize {
+        let mut applied = 0;
+        for p in params {
+            if p.name == "value" {
+                self.value = p.value.clone();
+                applied += 1;
+            }
+        }
+        applied
     }
 }
 
@@ -224,6 +244,63 @@ impl Block for SineSource {
     }
     fn clone_block(&self) -> Box<dyn Block> {
         Box::new(self.clone())
+    }
+    fn configuration(&self) -> Vec<Parameter> {
+        vec![
+            Parameter::new_tunable(
+                "amplitude",
+                SignalValue::Scalar(self.amplitude),
+                "block configuration",
+            ),
+            Parameter::new_tunable(
+                "frequency",
+                SignalValue::Scalar(self.frequency),
+                "block configuration",
+            ),
+            Parameter::new_tunable(
+                "offset",
+                SignalValue::Scalar(self.offset),
+                "block configuration",
+            ),
+            Parameter::new_tunable(
+                "phase",
+                SignalValue::Scalar(self.phase),
+                "block configuration",
+            ),
+        ]
+    }
+    fn apply_configuration(&mut self, params: &[Parameter]) -> usize {
+        let mut applied = 0;
+        for p in params {
+            if let SignalValue::Scalar(v) = p.value {
+                // A non-finite value from a hand-edited file is rejected
+                // rather than stored: it would propagate into every
+                // downstream computation as NaN.
+                if !v.is_finite() {
+                    continue;
+                }
+                match p.name.as_str() {
+                    "amplitude" => {
+                        self.amplitude = v;
+                        applied += 1;
+                    }
+                    "frequency" => {
+                        self.frequency = v;
+                        applied += 1;
+                    }
+                    "offset" => {
+                        self.offset = v;
+                        applied += 1;
+                    }
+                    "phase" => {
+                        self.phase = v;
+                        applied += 1;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        applied
     }
 }
 
@@ -346,6 +423,63 @@ impl Block for SquareSource {
     fn clone_block(&self) -> Box<dyn Block> {
         Box::new(self.clone())
     }
+    fn configuration(&self) -> Vec<Parameter> {
+        vec![
+            Parameter::new_tunable(
+                "amplitude",
+                SignalValue::Scalar(self.amplitude),
+                "block configuration",
+            ),
+            Parameter::new_tunable(
+                "duty_cycle",
+                SignalValue::Scalar(self.duty_cycle),
+                "block configuration",
+            ),
+            Parameter::new_tunable(
+                "frequency",
+                SignalValue::Scalar(self.frequency),
+                "block configuration",
+            ),
+            Parameter::new_tunable(
+                "offset",
+                SignalValue::Scalar(self.offset),
+                "block configuration",
+            ),
+        ]
+    }
+    fn apply_configuration(&mut self, params: &[Parameter]) -> usize {
+        let mut applied = 0;
+        for p in params {
+            if let SignalValue::Scalar(v) = p.value {
+                // A non-finite value from a hand-edited file is rejected
+                // rather than stored: it would propagate into every
+                // downstream computation as NaN.
+                if !v.is_finite() {
+                    continue;
+                }
+                match p.name.as_str() {
+                    "amplitude" => {
+                        self.amplitude = v;
+                        applied += 1;
+                    }
+                    "duty_cycle" => {
+                        self.duty_cycle = v;
+                        applied += 1;
+                    }
+                    "frequency" => {
+                        self.frequency = v;
+                        applied += 1;
+                    }
+                    "offset" => {
+                        self.offset = v;
+                        applied += 1;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        applied
+    }
 }
 
 // ──────────────────────────────────────────────
@@ -454,6 +588,54 @@ impl Block for StepSource {
     }
     fn clone_block(&self) -> Box<dyn Block> {
         Box::new(self.clone())
+    }
+    fn configuration(&self) -> Vec<Parameter> {
+        vec![
+            Parameter::new_tunable(
+                "final_val",
+                SignalValue::Scalar(self.final_val),
+                "block configuration",
+            ),
+            Parameter::new_tunable(
+                "initial",
+                SignalValue::Scalar(self.initial),
+                "block configuration",
+            ),
+            Parameter::new_tunable(
+                "step_time",
+                SignalValue::Scalar(self.step_time),
+                "block configuration",
+            ),
+        ]
+    }
+    fn apply_configuration(&mut self, params: &[Parameter]) -> usize {
+        let mut applied = 0;
+        for p in params {
+            if let SignalValue::Scalar(v) = p.value {
+                // A non-finite value from a hand-edited file is rejected
+                // rather than stored: it would propagate into every
+                // downstream computation as NaN.
+                if !v.is_finite() {
+                    continue;
+                }
+                match p.name.as_str() {
+                    "final_val" => {
+                        self.final_val = v;
+                        applied += 1;
+                    }
+                    "initial" => {
+                        self.initial = v;
+                        applied += 1;
+                    }
+                    "step_time" => {
+                        self.step_time = v;
+                        applied += 1;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        applied
     }
 }
 
@@ -595,6 +777,54 @@ impl Block for PulseSource {
     }
     fn clone_block(&self) -> Box<dyn Block> {
         Box::new(self.clone())
+    }
+    fn configuration(&self) -> Vec<Parameter> {
+        vec![
+            Parameter::new_tunable(
+                "amplitude",
+                SignalValue::Scalar(self.amplitude),
+                "block configuration",
+            ),
+            Parameter::new_tunable(
+                "delay",
+                SignalValue::Scalar(self.delay),
+                "block configuration",
+            ),
+            Parameter::new_tunable(
+                "width",
+                SignalValue::Scalar(self.width),
+                "block configuration",
+            ),
+        ]
+    }
+    fn apply_configuration(&mut self, params: &[Parameter]) -> usize {
+        let mut applied = 0;
+        for p in params {
+            if let SignalValue::Scalar(v) = p.value {
+                // A non-finite value from a hand-edited file is rejected
+                // rather than stored: it would propagate into every
+                // downstream computation as NaN.
+                if !v.is_finite() {
+                    continue;
+                }
+                match p.name.as_str() {
+                    "amplitude" => {
+                        self.amplitude = v;
+                        applied += 1;
+                    }
+                    "delay" => {
+                        self.delay = v;
+                        applied += 1;
+                    }
+                    "width" => {
+                        self.width = v;
+                        applied += 1;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        applied
     }
 }
 
@@ -743,6 +973,45 @@ impl Block for NoiseSource {
     }
     fn clone_block(&self) -> Box<dyn Block> {
         Box::new(self.clone())
+    }
+    fn configuration(&self) -> Vec<Parameter> {
+        vec![
+            Parameter::new_tunable(
+                "mean",
+                SignalValue::Scalar(self.mean),
+                "block configuration",
+            ),
+            Parameter::new_tunable(
+                "std_dev",
+                SignalValue::Scalar(self.std_dev),
+                "block configuration",
+            ),
+        ]
+    }
+    fn apply_configuration(&mut self, params: &[Parameter]) -> usize {
+        let mut applied = 0;
+        for p in params {
+            if let SignalValue::Scalar(v) = p.value {
+                // A non-finite value from a hand-edited file is rejected
+                // rather than stored: it would propagate into every
+                // downstream computation as NaN.
+                if !v.is_finite() {
+                    continue;
+                }
+                match p.name.as_str() {
+                    "mean" => {
+                        self.mean = v;
+                        applied += 1;
+                    }
+                    "std_dev" => {
+                        self.std_dev = v;
+                        applied += 1;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        applied
     }
 }
 

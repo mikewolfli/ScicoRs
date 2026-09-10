@@ -5,9 +5,7 @@ use crate::core::io::{IODeclaration, InputDecl, OutputDecl};
 use crate::core::param::{Parameter, ParameterSet};
 use crate::core::port::{Port, PortSet};
 use crate::core::signal::Signal;
-use crate::core::types::{
-    ComponentStatus, PortDirection, Scalar, SignalType, SignalValue, Time,
-};
+use crate::core::types::{ComponentStatus, PortDirection, Scalar, SignalType, SignalValue, Time};
 
 /// Photocurrent: I_photo = R · P, where R = responsivity (A/W).
 pub fn photocurrent(responsivity: Scalar, optical_power: Scalar) -> Scalar {
@@ -210,7 +208,8 @@ mod tests {
     fn test_quantum_efficiency_ideal() {
         let power = 1e-6;
         let lambda = 500e-9;
-        let n_photons = power * lambda / (crate::domains::optical::physics::H_PLANCK * crate::domains::optical::physics::C);
+        let n_photons = power * lambda
+            / (crate::domains::optical::physics::H_PLANCK * crate::domains::optical::physics::C);
         let ideal_current = n_photons * 1.602176634e-19;
         let qe = quantum_efficiency(ideal_current, power, lambda);
         assert!((qe - 1.0).abs() < 0.01);

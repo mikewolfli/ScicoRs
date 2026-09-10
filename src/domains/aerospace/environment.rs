@@ -94,7 +94,7 @@ impl HighAltitudeAtmosphere {
         (crate::domains::aerospace::physics::GAMMA_AIR
             * crate::domains::aerospace::physics::R_AIR
             * t)
-        .sqrt()
+            .sqrt()
     }
 }
 

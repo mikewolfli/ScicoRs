@@ -24,13 +24,12 @@ pub mod separation;
 
 pub use analysis::{conversion, reaction_enthalpy, selectivity, yield_ratio};
 pub use combustion::{
-    adiabatic_flame_temperature, auto_catalytic_conversion, explosive_limits,
-    laminar_flame_speed,
+    adiabatic_flame_temperature, auto_catalytic_conversion, explosive_limits, laminar_flame_speed,
 };
-pub use flowsheet::{heat_exchanger_ntu, ProcessFlowsheet, ProcessUnit};
+pub use flowsheet::{ProcessFlowsheet, ProcessUnit, heat_exchanger_ntu};
 pub use kinetics::{
-    arrhenius_rate, equilibrium_constant, half_life_first_order, reaction_rate,
-    reversible_rate, ReactionKinetics,
+    ReactionKinetics, arrhenius_rate, equilibrium_constant, half_life_first_order, reaction_rate,
+    reversible_rate,
 };
 pub use reactor::{BatchReactor, Cstr, Pfr};
 pub use separation::{

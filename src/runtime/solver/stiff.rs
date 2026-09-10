@@ -71,11 +71,15 @@ impl OdeSolver for BackwardEuler {
             Ok(())
         };
 
-        let result = newton.solve(&mut solve_f, None, x);
+        let result = newton.solve(&mut solve_f, None, x)?;
         // Accumulate Newton's internal stats (no double-counting: Newton counts its own calls)
         self.stats.jacobian_evals += newton.stats().jacobian_evals;
         self.stats.function_evals += newton.stats().function_evals;
-        result
+        // `NewtonRaphson` already increments its own accepted/rejected counters
+        // for this solve, so merge them instead of re-recording the outcome
+        // (which would double-count).
+        self.stats.merge_step_outcome(newton.stats());
+        Ok(result)
     }
 
     fn order(&self) -> u8 {
@@ -149,10 +153,13 @@ impl OdeSolver for Trapezoidal {
             Ok(())
         };
 
-        let result = newton.solve(&mut solve_f, None, x);
+        let result = newton.solve(&mut solve_f, None, x)?;
         self.stats.jacobian_evals += newton.stats().jacobian_evals;
         self.stats.function_evals += newton.stats().function_evals;
-        result
+        // Merge Newton's own accepted/rejected accounting rather than
+        // re-recording it, to avoid double-counting.
+        self.stats.merge_step_outcome(newton.stats());
+        Ok(result)
     }
 
     fn order(&self) -> u8 {
@@ -223,22 +230,32 @@ impl OdeSolver for BDF2 {
         let x_n = x.to_vec();
         let t_next = t + dt;
 
-        // First step: use Backward Euler (BDF1), then store x_n as x_prev
+        // First step: use Backward Euler (BDF1), then store x_n as x_prev.
         {
             let x_prev_guard = self.x_prev.lock().unwrap();
             if x_prev_guard.is_none() {
                 drop(x_prev_guard);
                 let mut be = BackwardEuler::new(self.config);
                 let result = be.step(f, x, t, dt)?;
-                // Store x_n as x_prev for next call
-                *self.x_prev.lock().unwrap() = Some(x_n);
                 // Merge the temporary BackwardEuler stats (function/Jacobian
                 // evaluations) so BDF2's reported statistics include the
                 // BDF1 warm-up step instead of undercounting them.
                 let be_stats = be.stats();
                 self.stats.function_evals += be_stats.function_evals;
                 self.stats.jacobian_evals += be_stats.jacobian_evals;
-                self.stats.steps_accepted += 1;
+
+                // Only commit the state history when the warm-up step actually
+                // converged. `step` returns `Ok(NotConverged)`/`Ok(Singular)`
+                // rather than `Err`, so the `?` above does not filter them; on
+                // those the returned `x` is not a solution and must not become
+                // the two-step history for every subsequent BDF2 step.
+                //
+                // `BackwardEuler` already merged Newton's counters, so merge its
+                // counters here rather than recording the outcome again.
+                self.stats.merge_step_outcome(be.stats());
+                if result.is_ok() {
+                    *self.x_prev.lock().unwrap() = Some(x_n);
+                }
                 return Ok(result);
             }
         }
@@ -270,9 +287,14 @@ impl OdeSolver for BDF2 {
         self.stats.jacobian_evals += newton.stats().jacobian_evals;
         self.stats.function_evals += newton.stats().function_evals;
 
-        // Store x_n as x_prev for the next step
-        *self.x_prev.lock().unwrap() = Some(x_n);
-        self.stats.steps_accepted += 1;
+        // Commit the two-step history only for a genuinely converged step.
+        // `newton.solve` reports failure as `Ok(NotConverged)`/`Ok(Singular)`,
+        // which the `?` above lets through; committing `x_n` regardless would
+        // silently seed every later BDF2 step from a divergent iterate.
+        self.stats.merge_step_outcome(newton.stats());
+        if result.is_ok() {
+            *self.x_prev.lock().unwrap() = Some(x_n);
+        }
 
         Ok(result)
     }
@@ -398,5 +420,176 @@ mod tests {
 
         let error = (x[0] - analytical_at_1).abs();
         assert!(error < 0.02, "BDF2 error too large: {}", error);
+    }
+
+    /// `NewtonRaphson::solve` reports failure as `Ok(NotConverged)`, not `Err`.
+    /// The BDF2 step used to ignore that and unconditionally commit the
+    /// unconverged iterate as the two-step history, silently contaminating every
+    /// later step. A non-converging step must be recorded as rejected and must
+    /// not advance the history.
+    #[test]
+    fn test_bdf2_non_convergence_is_recorded_and_does_not_commit_history() {
+        // `max_iter: 0` forces Newton to give up immediately, so every step
+        // returns `NotConverged`. The RHS is well-scaled, so this isolates the
+        // bookkeeping rather than an ill-conditioned Jacobian.
+        let config = SolverConfig {
+            max_iter: 0,
+            ..SolverConfig::default()
+        };
+        let mut solver = BDF2::new(config);
+        let mut rhs = |x: &[Scalar], _t: Scalar, dx: &mut [Scalar]| -> Result<(), SimError> {
+            dx[0] = -x[0];
+            Ok(())
+        };
+
+        let mut x = vec![1.0];
+        let first = solver.step(&mut rhs, &mut x, 0.0, 0.01).unwrap();
+        assert!(
+            !first.is_ok(),
+            "a zero-iteration Newton must not report success, got {first:?}"
+        );
+
+        let second = solver.step(&mut rhs, &mut x, 0.01, 0.01).unwrap();
+        assert!(
+            !second.is_ok(),
+            "the second step must also fail, got {second:?}"
+        );
+
+        let stats = solver.stats();
+        assert_eq!(
+            stats.steps_accepted, 0,
+            "no step converged, so none may be counted as accepted"
+        );
+        assert_eq!(
+            stats.steps_rejected, 2,
+            "both failed steps must be counted as rejected"
+        );
+
+        // The warm-up (BDF1) path returned early, so the two-step history must
+        // still be empty. This is the state the corruption bug would have
+        // polluted: committing `x_n` from an unconverged iterate.
+        assert!(
+            solver.x_prev.lock().unwrap().is_none(),
+            "an unconverged warm-up step must not seed the BDF2 history"
+        );
+    }
+
+    /// The BDF2 branch itself (past the first-step warm-up) must not commit an
+    /// unconverged iterate as the two-step history.
+    ///
+    /// `max_iter` is valid (1) but far too small for the Newton solve to reach
+    /// `atol` in one iteration, so the step reliably returns `NotConverged`.
+    /// The first call takes the BDF1 warm-up path; the second exercises BDF2.
+    #[test]
+    fn test_bdf2_branch_does_not_commit_unconverged_iterate() {
+        let config = SolverConfig {
+            max_iter: 1,
+            atol: 1e-300,
+            rtol: 1e-300,
+            ..SolverConfig::default()
+        };
+        assert!(
+            config.validate().is_ok(),
+            "the test config must be valid: {:?}",
+            config.validate()
+        );
+
+        let mut solver = BDF2::new(config);
+        let mut rhs = |x: &[Scalar], _t: Scalar, dx: &mut [Scalar]| -> Result<(), SimError> {
+            dx[0] = -x[0];
+            Ok(())
+        };
+
+        // Step 1 takes the warm-up path, which also cannot converge here.
+        let mut x = vec![1.0];
+        let first = solver.step(&mut rhs, &mut x, 0.0, 0.01).unwrap();
+        assert!(
+            !first.is_ok(),
+            "step 1 must not claim convergence: {first:?}"
+        );
+
+        // Clear the history so the next call is a fresh warm-up attempt rather
+        // than depending on step 1's outcome.
+        *solver.x_prev.lock().unwrap() = Some(vec![1.0]);
+
+        // Step 2 is the BDF2 branch.
+        let second = solver.step(&mut rhs, &mut x, 0.01, 0.01).unwrap();
+        assert!(
+            !second.is_ok(),
+            "step 2 must not claim convergence: {second:?}"
+        );
+
+        // The history must still be the value we seeded. `x_n` is the state at
+        // the *start* of the step, so on failure it must not be replaced by the
+        // unconverged iterate Newton happened to leave in `x`.
+        let committed = solver.x_prev.lock().unwrap().clone();
+        assert_eq!(
+            committed,
+            Some(vec![1.0]),
+            "an unconverged BDF2 step must not overwrite the two-step history"
+        );
+        assert_eq!(
+            solver.stats().steps_accepted,
+            0,
+            "nothing converged, so nothing may be counted as accepted"
+        );
+    }
+
+    /// The same failure-mode check for the other implicit methods, which
+    /// previously never touched the accepted/rejected counters at all.
+    #[test]
+    fn test_implicit_methods_record_rejected_steps() {
+        let config = SolverConfig {
+            max_iter: 0,
+            ..SolverConfig::default()
+        };
+        let mut rhs = |x: &[Scalar], _t: Scalar, dx: &mut [Scalar]| -> Result<(), SimError> {
+            dx[0] = -x[0];
+            Ok(())
+        };
+
+        let results = [
+            ("BackwardEuler", {
+                let mut x = [1.0];
+                BackwardEuler::new(config).step(&mut rhs, &mut x, 0.0, 0.01)
+            }),
+            ("Trapezoidal", {
+                let mut x = [1.0];
+                Trapezoidal::new(config).step(&mut rhs, &mut x, 0.0, 0.01)
+            }),
+        ];
+        for (name, result) in results {
+            let step = result.unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert!(
+                !step.is_ok(),
+                "{name} must not report success on zero iterations"
+            );
+        }
+    }
+
+    /// A converged BDF2 run must still report its accepted steps, so the fix
+    /// did not simply stop counting anything.
+    #[test]
+    fn test_bdf2_counts_accepted_steps_on_a_converging_problem() {
+        let mut solver = BDF2::new(SolverConfig::default());
+        let mut rhs = |x: &[Scalar], _t: Scalar, dx: &mut [Scalar]| -> Result<(), SimError> {
+            dx[0] = -x[0];
+            Ok(())
+        };
+        let mut x = vec![1.0];
+        let mut t = 0.0;
+        let dt = 0.001;
+        for _ in 0..20 {
+            let r = solver.step(&mut rhs, &mut x, t, dt).unwrap();
+            assert!(
+                r.is_ok(),
+                "a well-conditioned decay must converge, got {r:?}"
+            );
+            t += dt;
+        }
+        let stats = solver.stats();
+        assert_eq!(stats.steps_accepted, 20, "every converged step must count");
+        assert_eq!(stats.steps_rejected, 0);
+        assert!(stats.total_steps() == 20);
     }
 }

@@ -1,8 +1,8 @@
 //! Orbital analysis tools: energy, angular momentum, collision probability, visibility.
 
+use super::orbital::KeplerianElements;
 use crate::core::coord::Coord3D;
 use crate::core::types::Scalar;
-use super::orbital::KeplerianElements;
 
 /// Specific orbital energy: ε = v²/2 - GM/r.
 pub fn orbital_energy(position: &Coord3D, velocity: &[Scalar; 3], gm: Scalar) -> Scalar {
@@ -24,7 +24,9 @@ pub fn orbital_angular_momentum(position: &Coord3D, velocity: &[Scalar; 3]) -> [
 pub fn eccentricity_vector(position: &Coord3D, velocity: &[Scalar; 3], gm: Scalar) -> [Scalar; 3] {
     let h = orbital_angular_momentum(position, velocity);
     let r = (position.x * position.x + position.y * position.y + position.z * position.z).sqrt();
-    if r < 1e-15 || gm.abs() < 1e-30 { return [0.0; 3]; }
+    if r < 1e-15 || gm.abs() < 1e-30 {
+        return [0.0; 3];
+    }
 
     let v_cross_h = [
         velocity[1] * h[2] - velocity[2] * h[1],
@@ -41,9 +43,12 @@ pub fn eccentricity_vector(position: &Coord3D, velocity: &[Scalar; 3], gm: Scala
 
 /// Collision probability based on closest approach distance.
 pub fn collision_probability(
-    body1_pos: &Coord3D, body1_vel: &[Scalar; 3],
-    body2_pos: &Coord3D, body2_vel: &[Scalar; 3],
-    body1_radius: Scalar, body2_radius: Scalar,
+    body1_pos: &Coord3D,
+    body1_vel: &[Scalar; 3],
+    body2_pos: &Coord3D,
+    body2_vel: &[Scalar; 3],
+    body1_radius: Scalar,
+    body2_radius: Scalar,
 ) -> Scalar {
     let dr = [
         body2_pos.x - body1_pos.x,
@@ -57,12 +62,16 @@ pub fn collision_probability(
     ];
 
     let v_rel_sq = dv[0] * dv[0] + dv[1] * dv[1] + dv[2] * dv[2];
-    if v_rel_sq < 1e-30 { return 1.0; }
+    if v_rel_sq < 1e-30 {
+        return 1.0;
+    }
 
     let dr_dot_dv = dr[0] * dv[0] + dr[1] * dv[1] + dr[2] * dv[2];
     let t_ca = -dr_dot_dv / v_rel_sq;
 
-    if t_ca < 0.0 { return 0.0; }
+    if t_ca < 0.0 {
+        return 0.0;
+    }
 
     let closest = [
         dr[0] + dv[0] * t_ca,
@@ -72,14 +81,25 @@ pub fn collision_probability(
     let dist = (closest[0] * closest[0] + closest[1] * closest[1] + closest[2] * closest[2]).sqrt();
     let collision_distance = body1_radius + body2_radius;
 
-    if dist <= collision_distance { 1.0 } else { (collision_distance / dist).exp() * 0.5 }
+    if dist <= collision_distance {
+        1.0
+    } else {
+        (collision_distance / dist).exp() * 0.5
+    }
 }
 
 /// Orbital lifetime estimation using simplified drag model.
-pub fn orbital_lifetime(semi_major: Scalar, eccentricity: Scalar, area_mass_ratio: Scalar, _solar_activity: Scalar) -> Scalar {
+pub fn orbital_lifetime(
+    semi_major: Scalar,
+    eccentricity: Scalar,
+    area_mass_ratio: Scalar,
+    _solar_activity: Scalar,
+) -> Scalar {
     let r_earth = 6371000.0;
     let altitude = semi_major * (1.0 - eccentricity) - r_earth;
-    if altitude > 2000000.0 { return 1e9; } // Above significant drag
+    if altitude > 2000000.0 {
+        return 1e9;
+    } // Above significant drag
 
     // Simple exponential model
     let base_lifetime = 100.0 * (altitude / 100000.0).powi(3);
@@ -88,8 +108,11 @@ pub fn orbital_lifetime(semi_major: Scalar, eccentricity: Scalar, area_mass_rati
 
 /// Visibility window computation (simplified).
 pub fn visibility_window(
-    observer_pos: &Coord3D, target_oe: &KeplerianElements,
-    gm: Scalar, min_elevation: Scalar, time_range: (Scalar, Scalar),
+    observer_pos: &Coord3D,
+    target_oe: &KeplerianElements,
+    gm: Scalar,
+    min_elevation: Scalar,
+    time_range: (Scalar, Scalar),
 ) -> Vec<(Scalar, Scalar)> {
     let mut windows = Vec::new();
     let period = target_oe.period(gm);
@@ -104,10 +127,18 @@ pub fn visibility_window(
             target_pos.z - observer_pos.z,
         ];
         let los_mag = (los[0] * los[0] + los[1] * los[1] + los[2] * los[2]).sqrt();
-        if los_mag < 1e-15 { t += 60.0; continue; }
+        if los_mag < 1e-15 {
+            t += 60.0;
+            continue;
+        }
 
-        let obs_dist = (observer_pos.x * observer_pos.x + observer_pos.y * observer_pos.y + observer_pos.z * observer_pos.z).sqrt();
-        let cos_zenith = (los[0] * observer_pos.x + los[1] * observer_pos.y + los[2] * observer_pos.z) / (los_mag * obs_dist);
+        let obs_dist = (observer_pos.x * observer_pos.x
+            + observer_pos.y * observer_pos.y
+            + observer_pos.z * observer_pos.z)
+            .sqrt();
+        let cos_zenith =
+            (los[0] * observer_pos.x + los[1] * observer_pos.y + los[2] * observer_pos.z)
+                / (los_mag * obs_dist);
         let elevation = std::f64::consts::FRAC_PI_2 - cos_zenith.acos();
 
         if elevation > min_elevation {
@@ -122,8 +153,14 @@ pub fn visibility_window(
                     check_pos.y - observer_pos.y,
                     check_pos.z - observer_pos.z,
                 ];
-                let check_mag = (check_los[0] * check_los[0] + check_los[1] * check_los[1] + check_los[2] * check_los[2]).sqrt();
-                let check_cz = (check_los[0] * observer_pos.x + check_los[1] * observer_pos.y + check_los[2] * observer_pos.z) / (check_mag * obs_dist);
+                let check_mag = (check_los[0] * check_los[0]
+                    + check_los[1] * check_los[1]
+                    + check_los[2] * check_los[2])
+                    .sqrt();
+                let check_cz = (check_los[0] * observer_pos.x
+                    + check_los[1] * observer_pos.y
+                    + check_los[2] * observer_pos.z)
+                    / (check_mag * obs_dist);
                 let check_el = std::f64::consts::FRAC_PI_2 - check_cz.acos();
                 if check_el > min_elevation {
                     window_end = t_ext;
@@ -142,9 +179,9 @@ pub fn visibility_window(
 
 #[cfg(test)]
 mod tests {
-    use crate::core::coord::Coord3D;
     use super::super::physics::EARTH_GM;
     use super::*;
+    use crate::core::coord::Coord3D;
 
     #[test]
     fn test_orbital_energy_negative() {

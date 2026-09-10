@@ -6,19 +6,28 @@ type CS = num_complex::Complex<f64>;
 /// Channel Operating Margin (COM) for SerDes link compliance.
 #[derive(Debug, Clone)]
 pub struct ChannelOperatingMargin {
-    pub tx_eq: Vec<Scalar>, pub rx_eq: Vec<Scalar>,
+    pub tx_eq: Vec<Scalar>,
+    pub rx_eq: Vec<Scalar>,
     pub channel_s4p: Vec<Vec<CS>>,
-    pub baud_rate: Scalar, pub ber_target: Scalar,
+    pub baud_rate: Scalar,
+    pub ber_target: Scalar,
 }
 
 impl ChannelOperatingMargin {
     pub fn new(baud: Scalar) -> Self {
-        Self { tx_eq: vec![1.0], rx_eq: vec![1.0], channel_s4p: Vec::new(), baud_rate: baud, ber_target: 1e-12 }
+        Self {
+            tx_eq: vec![1.0],
+            rx_eq: vec![1.0],
+            channel_s4p: Vec::new(),
+            baud_rate: baud,
+            ber_target: 1e-12,
+        }
     }
 
     pub fn compute_com(&self) -> Scalar {
         let _f_nyquist = self.baud_rate / 2.0;
-        let mut signal = 0.0; let mut noise = 1e-30;
+        let mut signal = 0.0;
+        let mut noise = 1e-30;
         for s_params in &self.channel_s4p {
             if s_params.len() >= 2 {
                 let h = s_params[1].norm(); // S21 magnitude
@@ -40,7 +49,10 @@ impl ChannelOperatingMargin {
 mod tests {
     use super::*;
     #[test]
-    fn test_com_new() { let c = ChannelOperatingMargin::new(25e9); assert!((c.baud_rate - 25e9).abs() < 1.0); }
+    fn test_com_new() {
+        let c = ChannelOperatingMargin::new(25e9);
+        assert!((c.baud_rate - 25e9).abs() < 1.0);
+    }
     #[test]
     fn test_compute_com() {
         let mut c = ChannelOperatingMargin::new(25e9);

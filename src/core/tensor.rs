@@ -325,4 +325,5 @@ mod tests {
         let t = Tensor::from_vec(TensorDims::matrix(2, 3), vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
         assert_eq!(t.flat_index(&[1, 1]), Some(4));
         assert_eq!(t.flat_index(&[2, 0]), None);
-    }}
+    }
+}

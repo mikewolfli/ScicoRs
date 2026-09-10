@@ -36,10 +36,12 @@ pub fn speed_of_sound_air(temperature_c: Scalar) -> Scalar {
 ///              + 1.340·(S-35) + 1.630e-2·D + 1.675e-7·D²
 ///              - 1.025e-2·T·(S-35) - 7.139e-13·T·D³
 /// T: °C, S: salinity (ppt), D: depth (m)
-pub fn speed_of_sound_water(temperature_c: Scalar, salinity_ppt: Scalar, depth_m: Scalar) -> Scalar {
-    1448.96
-        + 4.591 * temperature_c
-        - 5.304e-2 * temperature_c * temperature_c
+pub fn speed_of_sound_water(
+    temperature_c: Scalar,
+    salinity_ppt: Scalar,
+    depth_m: Scalar,
+) -> Scalar {
+    1448.96 + 4.591 * temperature_c - 5.304e-2 * temperature_c * temperature_c
         + 2.374e-4 * temperature_c * temperature_c * temperature_c
         + 1.340 * (salinity_ppt - 35.0)
         + 1.630e-2 * depth_m
@@ -80,5 +82,4 @@ mod tests {
         let z = characteristic_impedance(1.2, 343.0);
         assert!((z - 1.2 * 343.0).abs() < 1e-10);
     }
-
 }

@@ -540,75 +540,153 @@ fn test_three_way_coupling() {
         ),
     ];
 
-    let result = scheduler
-        .fixed_point_iteration(&data, &|fields, field_type| {
-            let t = &fields[0];
-            let v = &fields[1];
-            let s = &fields[2];
-            match field_type {
-                PhysicsField::Thermal => {
-                    // T -= 0.05*v + 0.01*s (cooling from flow + structure)
-                    let updated: Vec<Scalar> = t
-                        .values
-                        .iter()
-                        .zip(v.values.iter())
-                        .zip(s.values.iter())
-                        .map(|((tv, vv), sv)| (tv - 0.05 * vv - 0.01 * sv).max(295.0))
-                        .collect();
-                    Ok(FieldData::new(
-                        PhysicsField::Thermal,
-                        QuantityType::Scalar,
-                        t.points.clone(),
-                        updated,
-                        0.0,
-                    ))
-                }
-                PhysicsField::Fluid => {
-                    // v += 0.02*(T - 300) (buoyancy)
-                    let updated: Vec<Scalar> = v
-                        .values
-                        .iter()
-                        .zip(t.values.iter())
-                        .map(|(vv, tv)| (vv + 0.02 * (tv - 300.0)).max(0.1))
-                        .collect();
-                    Ok(FieldData::new(
-                        PhysicsField::Fluid,
-                        QuantityType::Scalar,
-                        v.points.clone(),
-                        updated,
-                        0.0,
-                    ))
-                }
-                PhysicsField::Structural => {
-                    // s += 0.01*(T - 300) - 0.1*s (thermal expansion + damping)
-                    let updated: Vec<Scalar> = s
-                        .values
-                        .iter()
-                        .zip(t.values.iter())
-                        .map(|(sv, tv)| (sv + 0.01 * (tv - 300.0) - 0.1 * sv).max(0.0))
-                        .collect();
-                    Ok(FieldData::new(
-                        PhysicsField::Structural,
-                        QuantityType::Scalar,
-                        s.points.clone(),
-                        updated,
-                        0.0,
-                    ))
-                }
-                _ => Err("Unknown field".to_string()),
+    let outcome = scheduler.fixed_point_iteration(&data, &|fields, field_type| {
+        let t = &fields[0];
+        let v = &fields[1];
+        let s = &fields[2];
+        match field_type {
+            PhysicsField::Thermal => {
+                // T -= 0.05*v + 0.01*s (cooling from flow + structure)
+                let updated: Vec<Scalar> = t
+                    .values
+                    .iter()
+                    .zip(v.values.iter())
+                    .zip(s.values.iter())
+                    .map(|((tv, vv), sv)| (tv - 0.05 * vv - 0.01 * sv).max(295.0))
+                    .collect();
+                Ok(FieldData::new(
+                    PhysicsField::Thermal,
+                    QuantityType::Scalar,
+                    t.points.clone(),
+                    updated,
+                    0.0,
+                ))
             }
-        })
-        .unwrap();
+            PhysicsField::Fluid => {
+                // v += 0.02*(T - 300) (buoyancy)
+                let updated: Vec<Scalar> = v
+                    .values
+                    .iter()
+                    .zip(t.values.iter())
+                    .map(|(vv, tv)| (vv + 0.02 * (tv - 300.0)).max(0.1))
+                    .collect();
+                Ok(FieldData::new(
+                    PhysicsField::Fluid,
+                    QuantityType::Scalar,
+                    v.points.clone(),
+                    updated,
+                    0.0,
+                ))
+            }
+            PhysicsField::Structural => {
+                // s += 0.01*(T - 300) - 0.1*s (thermal expansion + damping)
+                let updated: Vec<Scalar> = s
+                    .values
+                    .iter()
+                    .zip(t.values.iter())
+                    .map(|(sv, tv)| (sv + 0.01 * (tv - 300.0) - 0.1 * sv).max(0.0))
+                    .collect();
+                Ok(FieldData::new(
+                    PhysicsField::Structural,
+                    QuantityType::Scalar,
+                    s.points.clone(),
+                    updated,
+                    0.0,
+                ))
+            }
+            _ => Err("Unknown field".to_string()),
+        }
+    });
 
+    // This coupling is genuinely divergent: the buoyancy term feeds velocity
+    // back into temperature with a gain large enough to grow monotonically
+    // (`max Δ` increases every sweep). The scheduler must **report** that rather
+    // than returning the unconverged fields as success, which is what it used to
+    // do: the caller had no way to distinguish convergence from divergence.
+    let err = outcome.expect_err(
+        "a divergent 3-field coupling must be reported as non-convergence, \
+         not returned as a successful result",
+    );
+    assert!(
+        err.contains("did not converge"),
+        "the error must say the iteration did not converge, got: {err}"
+    );
+    assert!(
+        err.contains("atol=") && err.contains("rtol="),
+        "the error must report the tolerances used, got: {err}"
+    );
+}
+
+/// A *convergent* multi-field coupling must still succeed and return finite
+/// fields, so the stricter reporting did not simply reject everything.
+#[test]
+fn test_three_way_coupling_that_converges_succeeds() {
+    let n_pts = 8;
+    let points = make_grid_points(2, 2, 2, 0.5, 0.5, 0.5);
+    // A contractive coupling: `x ← 0.5·x + 0.5·(x·0.5 + 150)` has fixed point
+    // 300 with a contraction factor of 0.75, so the sweep converges; the
+    // tolerances are loosened to reach it well inside `max_iterations`.
+    let scheduler = CouplingScheduler::new(ConvergenceCriteria {
+        absolute_tolerance: 1e-6,
+        relative_tolerance: 1e-9,
+        max_iterations: 200,
+        relaxation_factor: 0.5,
+    });
+    let data = vec![
+        FieldData::new(
+            PhysicsField::Thermal,
+            QuantityType::Scalar,
+            points.clone(),
+            vec![350.0; n_pts],
+            0.0,
+        ),
+        FieldData::new(
+            PhysicsField::Fluid,
+            QuantityType::Scalar,
+            points.clone(),
+            vec![1.0; n_pts],
+            0.0,
+        ),
+        FieldData::new(
+            PhysicsField::Structural,
+            QuantityType::Scalar,
+            points,
+            vec![0.0; n_pts],
+            0.0,
+        ),
+    ];
+
+    // A contractive coupling: each field decays toward a common fixed point, so
+    // the iteration converges and the values must come back finite.
+    let outcome = scheduler.fixed_point_iteration(&data, &|fields, field_type| {
+        let idx = match field_type {
+            PhysicsField::Thermal => 0,
+            PhysicsField::Fluid => 1,
+            PhysicsField::Structural => 2,
+            _ => return Err("Unknown field".to_string()),
+        };
+        let src = &fields[0].values;
+        let updated: Vec<Scalar> = fields[idx]
+            .values
+            .iter()
+            .zip(src.iter())
+            .map(|(own, t)| 0.5 * own + 0.5 * (t * 0.5 + 150.0))
+            .collect();
+        Ok(FieldData::new(
+            field_type,
+            QuantityType::Scalar,
+            fields[idx].points.clone(),
+            updated,
+            0.0,
+        ))
+    });
+
+    let result = outcome.expect("a contractive coupling must converge");
     assert_eq!(result.len(), 3);
-    // Structural displacement should be positive (thermal expansion)
-    for &val in &result[2].values {
-        assert!(val >= 0.0, "structural displacement should be ≥ 0");
-    }
-    // All values finite
     for field in &result {
         for &val in &field.values {
-            assert!(val.is_finite());
+            assert!(val.is_finite(), "all values must be finite");
+            assert!(val >= 0.0, "this coupling keeps values non-negative");
         }
     }
 }

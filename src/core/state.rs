@@ -128,9 +128,11 @@ mod tests {
     #[test]
     fn test_state_declaration() {
         let mut sd = StateDeclaration::new();
-        sd.add_continuous(ContinuousStateVar::new("x1", 0.0)
-            .with_description("position")
-            .with_bounds(-1e6, 1e6));
+        sd.add_continuous(
+            ContinuousStateVar::new("x1", 0.0)
+                .with_description("position")
+                .with_bounds(-1e6, 1e6),
+        );
         sd.add_discrete(DiscreteStateVar::new("z1", SignalValue::Integer(0)));
         assert_eq!(sd.continuous_count(), 1);
         assert_eq!(sd.discrete_count(), 1);

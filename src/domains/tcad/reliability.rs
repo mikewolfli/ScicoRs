@@ -21,7 +21,13 @@ pub fn hci_degradation(vds: Scalar, ids: Scalar, _time: Scalar) -> Scalar {
 mod tests {
     use super::*;
     #[test]
-    fn test_nbti() { let d = nbti_degradation(1.8, 400.0, 1000.0); assert!(d > 0.0); }
+    fn test_nbti() {
+        let d = nbti_degradation(1.8, 400.0, 1000.0);
+        assert!(d > 0.0);
+    }
     #[test]
-    fn test_hci() { let d = hci_degradation(1.8, 1e-3, 1000.0); assert!(d >= 0.0); }
+    fn test_hci() {
+        let d = hci_degradation(1.8, 1e-3, 1000.0);
+        assert!(d >= 0.0);
+    }
 }

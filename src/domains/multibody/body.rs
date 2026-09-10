@@ -158,12 +158,7 @@ impl RigidBody {
     ///
     /// Initial orientation is identity (aligned with world frame).  Initial
     /// velocities are zero.
-    pub fn new(
-        id: &str,
-        mass: Scalar,
-        inertia: [[Scalar; 3]; 3],
-        position: Coord3D,
-    ) -> Self {
+    pub fn new(id: &str, mass: Scalar, inertia: [[Scalar; 3]; 3], position: Coord3D) -> Self {
         Self {
             id: id.to_string(),
             mass,
@@ -223,12 +218,7 @@ impl RigidBody {
     /// - `ω += I⁻¹ · τ · dt`
     ///
     /// The orientation is *not* updated here (that is done by the integrator).
-    pub fn apply_force_and_torque(
-        &mut self,
-        force: [Scalar; 3],
-        torque: [Scalar; 3],
-        dt: Scalar,
-    ) {
+    pub fn apply_force_and_torque(&mut self, force: [Scalar; 3], torque: [Scalar; 3], dt: Scalar) {
         let inv_mass = if self.mass > 0.0 {
             1.0 / self.mass
         } else {

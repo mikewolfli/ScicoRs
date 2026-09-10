@@ -10,9 +10,9 @@ pub mod bem_acoustic;
 pub mod cavity;
 pub mod physics;
 pub mod transducer;
+pub mod ultrasound;
 pub mod vibro_acoustic;
 pub mod wave_prop;
-pub mod ultrasound;
 
 pub use analysis::{
     a_weighting, damping_ratio_from_peak, equivalent_sound_level, frequency_response_function,

@@ -142,13 +142,13 @@ impl GateOperation {
         let rho_mat: Vec<Vec<ComplexScalar>> = (0..dim)
             .map(|i| rho.data[i * dim..(i + 1) * dim].to_vec())
             .collect();
-        let tmp = crate::core::compute::matrix::mat_mul_complex(&mat, &rho_mat)
-            .map_err(|e| e.message)?;
+        let tmp =
+            crate::core::compute::matrix::mat_mul_complex(&mat, &rho_mat).map_err(|e| e.message)?;
         let mat_dag: Vec<Vec<ComplexScalar>> = (0..dim)
             .map(|j| (0..dim).map(|i| mat[i][j].conj()).collect())
             .collect();
-        let out = crate::core::compute::matrix::mat_mul_complex(&tmp, &mat_dag)
-            .map_err(|e| e.message)?;
+        let out =
+            crate::core::compute::matrix::mat_mul_complex(&tmp, &mat_dag).map_err(|e| e.message)?;
         let new_data: Vec<ComplexScalar> = out.into_iter().flatten().collect();
         Ok(DensityMatrix {
             data: new_data,

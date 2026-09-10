@@ -74,6 +74,20 @@ pub fn import_stl(filepath: &str) -> Result<StlMesh, String> {
     }
 
     let mut mesh = StlMesh::new();
+    // Recover the length unit from the header comment written by `export_stl`.
+    // Binary STL has no dedicated unit field, so the header is the only carrier;
+    // ignoring it made `unit` write-only.
+    if let Ok(header) = std::str::from_utf8(&data[..80])
+        && let Some(pos) = header.find("unit=")
+    {
+        let unit: String = header[pos + "unit=".len()..]
+            .chars()
+            .take_while(|c| !c.is_whitespace() && *c != '\0')
+            .collect();
+        if !unit.is_empty() {
+            mesh.unit = unit;
+        }
+    }
     mesh.triangles.reserve(num_triangles);
     for i in 0..num_triangles {
         let offset = BINARY_HEADER_LEN + i * TRIANGLE_RECORD_LEN;
@@ -213,21 +227,35 @@ mod tests {
         assert_eq!(imported.triangles[0].v3.y, 1.0);
     }
 
-    /// The exporter used to write an all-zero header, so the mesh unit was lost.
+    /// The STL unit used to be written into the header but never read back, so
+    /// the round trip silently returned the default. This asserts the *imported*
+    /// unit, not just the written bytes.
     #[test]
-    fn test_stl_roundtrip_preserves_unit_in_header() {
+    fn test_stl_roundtrip_preserves_unit_through_import() {
         let mut mesh = StlMesh::new();
         mesh.unit = "inch".to_string();
         mesh.triangles.push(tri([1.0, 0.0, 0.0]));
         let path = scratch("unit");
         export_stl(&mesh, &path).unwrap();
-        let raw = std::fs::read(&path).unwrap();
+        let imported = import_stl(&path).expect("the exported STL must be importable");
         let _ = std::fs::remove_file(&path);
-        let header = String::from_utf8_lossy(&raw[..80]);
-        assert!(
-            header.contains("unit=inch"),
-            "unit must be recorded in the header, got: {header:?}"
+        assert_eq!(
+            imported.unit, "inch",
+            "import_stl must read the unit.from the header, not default it"
         );
+    }
+
+    /// A header without a `unit=` marker must keep the documented default rather
+    /// than producing an empty unit string.
+    #[test]
+    fn test_stl_import_defaults_unit_when_header_has_no_marker() {
+        let path = scratch("nounit");
+        let mut data = vec![0u8; 84];
+        data[80..84].copy_from_slice(&0u32.to_le_bytes());
+        std::fs::write(&path, &data).unwrap();
+        let imported = import_stl(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(imported.unit, "mm", "the default unit must survive");
     }
 
     #[test]

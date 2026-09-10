@@ -21,7 +21,13 @@ pub fn stefan_boltzmann(emissivity: Scalar, temperature: Scalar) -> Scalar {
 /// Simplified for the case where both surfaces are large and close
 /// (A₁ = A₂ = A, F₁₂ = 1):
 ///   Q = σ · A · (T₁⁴ - T₂⁴) / (1/ε₁ + 1/ε₂ - 1)
-pub fn radiation_exchange(a1: Scalar, eps1: Scalar, eps2: Scalar, t1: Scalar, t2: Scalar) -> Scalar {
+pub fn radiation_exchange(
+    a1: Scalar,
+    eps1: Scalar,
+    eps2: Scalar,
+    t1: Scalar,
+    t2: Scalar,
+) -> Scalar {
     if a1 <= 0.0 || eps1 <= 0.0 || eps2 <= 0.0 {
         return 0.0;
     }
@@ -79,7 +85,11 @@ pub fn view_factor_perpendicular_rectangles(l: Scalar, w: Scalar, h: Scalar) -> 
     let b = (w2 * sum) / ((1.0 + w2) * (w2 + h2));
     let c = (h2 * sum) / ((1.0 + h2) * (w2 + h2));
     let log_arg = a * b.powf(w2) * c.powf(h2);
-    let ln_part = if log_arg > 0.0 { 0.25 * log_arg.ln() } else { 0.0 };
+    let ln_part = if log_arg > 0.0 {
+        0.25 * log_arg.ln()
+    } else {
+        0.0
+    };
 
     let result = (term1 + term2 - term3 + ln_part) / (std::f64::consts::PI * w_ratio);
     result.max(0.0)

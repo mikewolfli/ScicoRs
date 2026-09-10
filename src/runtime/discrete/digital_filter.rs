@@ -114,6 +114,15 @@ pub struct IIRFilter {
     y_buffer: VecDeque<Scalar>,
 }
 
+/// An IIR filter in direct form, using normalised coefficients.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IirCoefficients {
+    /// Feedforward coefficients (normalised so that `a[0] ≡ 1`).
+    pub b: Vec<Scalar>,
+    /// Feedback coefficients (normalised so that `a[0] ≡ 1`).
+    pub a: Vec<Scalar>,
+}
+
 impl IIRFilter {
     /// Create a new IIR filter from feedforward and feedback coefficients.
     ///
@@ -147,6 +156,27 @@ impl IIRFilter {
             x_buffer: x_buf,
             y_buffer: y_buf,
         }
+    }
+
+    /// The filter's current (normalised) coefficients.
+    ///
+    /// Returns a structured snapshot rather than a reference because `a`/`b`
+    /// are public vectors; callers that need to restore a filter should hand
+    /// the result to [`IIRFilter::from_coefficients`].
+    pub fn coefficients(&self) -> IirCoefficients {
+        IirCoefficients {
+            b: self.b.clone(),
+            a: self.a.clone(),
+        }
+    }
+
+    /// Rebuild a filter from a previously captured [`IirCoefficients`].
+    ///
+    /// # Panics
+    /// Panics under the same conditions as [`IIRFilter::new`] if the supplied
+    /// coefficients are empty or `a[0]` is zero.
+    pub fn from_coefficients(c: &IirCoefficients) -> Self {
+        Self::new(&c.b, &c.a)
     }
 
     /// Advance the filter by one sample.

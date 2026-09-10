@@ -9,8 +9,17 @@ pub fn ir_drop(current: Scalar, resistance: Scalar) -> Scalar {
 }
 
 /// Buck converter output ripple voltage (simplified).
-pub fn buck_ripple_voltage(vin: Scalar, vout: Scalar, l: Scalar, c: Scalar, freq: Scalar, esr: Scalar) -> Scalar {
-    if freq <= 0.0 || l <= 0.0 || c <= 0.0 { return 0.0; }
+pub fn buck_ripple_voltage(
+    vin: Scalar,
+    vout: Scalar,
+    l: Scalar,
+    c: Scalar,
+    freq: Scalar,
+    esr: Scalar,
+) -> Scalar {
+    if freq <= 0.0 || l <= 0.0 || c <= 0.0 {
+        return 0.0;
+    }
     let d = vout / vin;
     let di = (vin - vout) * d / (l * freq);
     let dv_c = di / (8.0 * c * freq);
@@ -20,7 +29,9 @@ pub fn buck_ripple_voltage(vin: Scalar, vout: Scalar, l: Scalar, c: Scalar, freq
 
 /// Target impedance for PDN: Z_target = V·ripple_pct / I_max.
 pub fn target_impedance(voltage: Scalar, ripple_pct: Scalar, max_current: Scalar) -> Scalar {
-    if max_current <= 0.0 { return Scalar::INFINITY; }
+    if max_current <= 0.0 {
+        return Scalar::INFINITY;
+    }
     voltage * ripple_pct / max_current
 }
 
@@ -40,9 +51,15 @@ pub struct DecapNetwork {
 }
 
 impl DecapNetwork {
-    pub fn new() -> Self { Self { capacitors: Vec::new() } }
+    pub fn new() -> Self {
+        Self {
+            capacitors: Vec::new(),
+        }
+    }
 
-    pub fn add(&mut self, c: Decap) { self.capacitors.push(c); }
+    pub fn add(&mut self, c: Decap) {
+        self.capacitors.push(c);
+    }
 
     /// Total impedance at frequency f.
     pub fn impedance(&self, freq: Scalar) -> Complex<Scalar> {
@@ -66,9 +83,13 @@ impl DecapNetwork {
 
     /// Self-resonant frequency of the i-th capacitor.
     pub fn self_resonant_freq(&self, idx: usize) -> Scalar {
-        if idx >= self.capacitors.len() { return 0.0; }
+        if idx >= self.capacitors.len() {
+            return 0.0;
+        }
         let c = &self.capacitors[idx];
-        if c.capacitance <= 0.0 || c.esl <= 0.0 { return 0.0; }
+        if c.capacitance <= 0.0 || c.esl <= 0.0 {
+            return 0.0;
+        }
         1.0 / (2.0 * std::f64::consts::PI * f64::sqrt(c.capacitance * c.esl))
     }
 
@@ -86,16 +107,29 @@ impl DecapNetwork {
     }
 }
 
-impl Default for DecapNetwork { fn default() -> Self { Self::new() } }
+impl Default for DecapNetwork {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 /// PDN impedance at frequency f.
 ///
 /// The VRM output impedance `vrm_output` (Ω) is placed in series with the
 /// parallel combination of the plane capacitance and the decoupling network:
 /// `Z_pdn = Z_vrm + (Z_plane ∥ Z_decap)`.
-pub fn pdn_impedance(vrm_output: Scalar, decap_network: &DecapNetwork, plane_cap: Scalar, freq: Scalar) -> Complex<Scalar> {
+pub fn pdn_impedance(
+    vrm_output: Scalar,
+    decap_network: &DecapNetwork,
+    plane_cap: Scalar,
+    freq: Scalar,
+) -> Complex<Scalar> {
     let omega = 2.0 * std::f64::consts::PI * freq;
-    let z_plane = if plane_cap > 0.0 { Complex::new(0.0, -1.0 / (omega * plane_cap)) } else { Complex::new(0.0, 0.0) };
+    let z_plane = if plane_cap > 0.0 {
+        Complex::new(0.0, -1.0 / (omega * plane_cap))
+    } else {
+        Complex::new(0.0, 0.0)
+    };
     let z_decap = decap_network.impedance(freq);
     let z_parallel = if z_decap.norm() > 0.0 && z_plane.norm() > 0.0 {
         (z_decap * z_plane) / (z_decap + z_plane)
@@ -132,7 +166,12 @@ mod tests {
     #[test]
     fn test_decap_srf() {
         let mut net = DecapNetwork::new();
-        net.add(Decap { capacitance: 10e-6, esr: 0.01, esl: 1e-9, count: 2 });
+        net.add(Decap {
+            capacitance: 10e-6,
+            esr: 0.01,
+            esl: 1e-9,
+            count: 2,
+        });
         let srf = net.self_resonant_freq(0);
         assert!(srf > 1e3 && srf < 1e8);
     }
@@ -140,7 +179,12 @@ mod tests {
     #[test]
     fn test_decap_network_impedance() {
         let mut net = DecapNetwork::new();
-        net.add(Decap { capacitance: 10e-6, esr: 0.01, esl: 1e-9, count: 1 });
+        net.add(Decap {
+            capacitance: 10e-6,
+            esr: 0.01,
+            esl: 1e-9,
+            count: 1,
+        });
         let z = net.impedance(1e5);
         assert!(z.norm() > 0.0);
     }

@@ -114,7 +114,11 @@ impl AircraftAerodynamics {
 /// deflection angle θ (rad), using the θ-β-M relation.
 ///
 /// Returns `None` if the shock is detached (no real solution).
-pub fn oblique_shock_angle(mach: Scalar, deflection_angle: Scalar, gamma: Scalar) -> Option<Scalar> {
+pub fn oblique_shock_angle(
+    mach: Scalar,
+    deflection_angle: Scalar,
+    gamma: Scalar,
+) -> Option<Scalar> {
     if mach <= 1.0 || deflection_angle <= 0.0 {
         return None;
     }
@@ -177,11 +181,7 @@ pub fn oblique_shock_angle(mach: Scalar, deflection_angle: Scalar, gamma: Scalar
     let denom_val = m2 * (g + 2.0 * cb * cb - 1.0) + 2.0;
     let residual = (num_val / denom_val - theta).abs();
 
-    if residual < 1e-6 {
-        Some(beta)
-    } else {
-        None
-    }
+    if residual < 1e-6 { Some(beta) } else { None }
 }
 
 /// Normal shock wave pressure ratio.

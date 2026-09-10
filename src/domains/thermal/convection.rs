@@ -85,12 +85,8 @@ pub fn nucleate_boiling_h(delta_t_sat: Scalar, fluid: &str) -> Scalar {
             // Simplified: ~5.56 * ΔT_sat^3 for water
             5.56 * delta_t_sat.powi(3)
         }
-        "r134a" => {
-            2.5 * delta_t_sat.powi(2)
-        }
-        "r22" => {
-            3.0 * delta_t_sat.powi(2)
-        }
+        "r134a" => 2.5 * delta_t_sat.powi(2),
+        "r22" => 3.0 * delta_t_sat.powi(2),
         _ => {
             // Generic correlation
             1.5 * delta_t_sat.powi(2)

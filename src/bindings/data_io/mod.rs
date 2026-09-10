@@ -6,11 +6,11 @@
 //! - **`stl_io`** — Binary STL file import/export
 //! - **`mesh_io`** — Multi-format mesh I/O (VTK, Gmsh, Abaqus, Ansys)
 
+pub mod mesh_io;
 pub mod step_io;
 pub mod stl_io;
-pub mod mesh_io;
 
 // Backward-compatible re-exports
+pub use mesh_io::*;
 pub use step_io::*;
 pub use stl_io::*;
-pub use mesh_io::*;

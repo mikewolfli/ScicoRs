@@ -5,7 +5,7 @@
 
 use crate::core::block::{Block, BlockId};
 use crate::core::error::SimError;
-use crate::core::param::ParameterSet;
+use crate::core::param::{Parameter, ParameterSet};
 use crate::core::port::{Port, PortSet};
 use crate::core::signal::Signal;
 use crate::core::types::{
@@ -552,6 +552,34 @@ impl Block for Comparator {
     fn clone_block(&self) -> Box<dyn Block> {
         Box::new(self.clone())
     }
+    fn configuration(&self) -> Vec<Parameter> {
+        vec![Parameter::new_tunable(
+            "hysteresis",
+            SignalValue::Scalar(self.hysteresis),
+            "block configuration",
+        )]
+    }
+    fn apply_configuration(&mut self, params: &[Parameter]) -> usize {
+        let mut applied = 0;
+        for p in params {
+            if let SignalValue::Scalar(v) = p.value {
+                // A non-finite value from a hand-edited file is rejected
+                // rather than stored: it would propagate into every
+                // downstream computation as NaN.
+                if !v.is_finite() {
+                    continue;
+                }
+                match p.name.as_str() {
+                    "hysteresis" => {
+                        self.hysteresis = v;
+                        applied += 1;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        applied
+    }
 }
 
 // ──────────────────────────────────────────────
@@ -772,6 +800,37 @@ impl Block for Saturation {
     fn clone_block(&self) -> Box<dyn Block> {
         Box::new(self.clone())
     }
+    fn configuration(&self) -> Vec<Parameter> {
+        vec![
+            Parameter::new_tunable("max", SignalValue::Scalar(self.max), "block configuration"),
+            Parameter::new_tunable("min", SignalValue::Scalar(self.min), "block configuration"),
+        ]
+    }
+    fn apply_configuration(&mut self, params: &[Parameter]) -> usize {
+        let mut applied = 0;
+        for p in params {
+            if let SignalValue::Scalar(v) = p.value {
+                // A non-finite value from a hand-edited file is rejected
+                // rather than stored: it would propagate into every
+                // downstream computation as NaN.
+                if !v.is_finite() {
+                    continue;
+                }
+                match p.name.as_str() {
+                    "max" => {
+                        self.max = v;
+                        applied += 1;
+                    }
+                    "min" => {
+                        self.min = v;
+                        applied += 1;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        applied
+    }
 }
 
 // ──────────────────────────────────────────────
@@ -888,6 +947,34 @@ impl Block for Switch {
     }
     fn clone_block(&self) -> Box<dyn Block> {
         Box::new(self.clone())
+    }
+    fn configuration(&self) -> Vec<Parameter> {
+        vec![Parameter::new_tunable(
+            "threshold",
+            SignalValue::Scalar(self.threshold),
+            "block configuration",
+        )]
+    }
+    fn apply_configuration(&mut self, params: &[Parameter]) -> usize {
+        let mut applied = 0;
+        for p in params {
+            if let SignalValue::Scalar(v) = p.value {
+                // A non-finite value from a hand-edited file is rejected
+                // rather than stored: it would propagate into every
+                // downstream computation as NaN.
+                if !v.is_finite() {
+                    continue;
+                }
+                match p.name.as_str() {
+                    "threshold" => {
+                        self.threshold = v;
+                        applied += 1;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        applied
     }
 }
 

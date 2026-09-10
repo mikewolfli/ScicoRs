@@ -5,7 +5,7 @@
 
 use crate::core::block::{Block, BlockId};
 use crate::core::error::SimError;
-use crate::core::param::ParameterSet;
+use crate::core::param::{Parameter, ParameterSet, all_finite};
 use crate::core::port::{Port, PortSet};
 use crate::core::signal::Signal;
 use crate::core::types::{
@@ -123,6 +123,46 @@ impl Block for Adder {
     }
     fn clone_block(&self) -> Box<dyn Block> {
         Box::new(self.clone())
+    }
+    fn configuration(&self) -> Vec<Parameter> {
+        vec![
+            Parameter::new_tunable(
+                "bias",
+                SignalValue::Scalar(self.bias),
+                "block configuration",
+            ),
+            Parameter::new_tunable("k1", SignalValue::Scalar(self.k1), "block configuration"),
+            Parameter::new_tunable("k2", SignalValue::Scalar(self.k2), "block configuration"),
+        ]
+    }
+    fn apply_configuration(&mut self, params: &[Parameter]) -> usize {
+        let mut applied = 0;
+        for p in params {
+            if let SignalValue::Scalar(v) = p.value {
+                // A non-finite value from a hand-edited file is rejected
+                // rather than stored: it would propagate into every
+                // downstream computation as NaN.
+                if !v.is_finite() {
+                    continue;
+                }
+                match p.name.as_str() {
+                    "bias" => {
+                        self.bias = v;
+                        applied += 1;
+                    }
+                    "k1" => {
+                        self.k1 = v;
+                        applied += 1;
+                    }
+                    "k2" => {
+                        self.k2 = v;
+                        applied += 1;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        applied
     }
 }
 
@@ -454,6 +494,34 @@ impl Block for Divider {
     fn clone_block(&self) -> Box<dyn Block> {
         Box::new(self.clone())
     }
+    fn configuration(&self) -> Vec<Parameter> {
+        vec![Parameter::new_tunable(
+            "epsilon",
+            SignalValue::Scalar(self.epsilon),
+            "block configuration",
+        )]
+    }
+    fn apply_configuration(&mut self, params: &[Parameter]) -> usize {
+        let mut applied = 0;
+        for p in params {
+            if let SignalValue::Scalar(v) = p.value {
+                // A non-finite value from a hand-edited file is rejected
+                // rather than stored: it would propagate into every
+                // downstream computation as NaN.
+                if !v.is_finite() {
+                    continue;
+                }
+                match p.name.as_str() {
+                    "epsilon" => {
+                        self.epsilon = v;
+                        applied += 1;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        applied
+    }
 }
 
 // ──────────────────────────────────────────────
@@ -556,6 +624,28 @@ impl Block for Gain {
     }
     fn clone_block(&self) -> Box<dyn Block> {
         Box::new(self.clone())
+    }
+
+    /// The gain lives in the typed `k` field, so expose it explicitly (and read
+    /// it back on load) rather than relying only on the mirrored parameter.
+    fn configuration(&self) -> Vec<Parameter> {
+        vec![Parameter::new_tunable(
+            "k",
+            SignalValue::Scalar(self.k),
+            "gain factor",
+        )]
+    }
+    fn apply_configuration(&mut self, params: &[Parameter]) -> usize {
+        let mut applied = 0;
+        for p in params {
+            if let ("k", SignalValue::Scalar(v)) = (p.name.as_str(), &p.value) {
+                if v.is_finite() {
+                    self.k = *v;
+                    applied += 1;
+                }
+            }
+        }
+        applied
     }
 }
 
@@ -818,6 +908,29 @@ impl Block for MatrixMultiply {
     }
     fn clone_block(&self) -> Box<dyn Block> {
         Box::new(self.clone())
+    }
+
+    /// The 2x2 coefficient matrix is serialized as a `SignalValue::Matrix`, and
+    /// the incoming data is rejected unless it is genuinely 2x2 and finite.
+    fn configuration(&self) -> Vec<Parameter> {
+        let flat: Vec<Scalar> = self.a.iter().flatten().copied().collect();
+        vec![Parameter::new_config(
+            "a",
+            SignalValue::Matrix(2, 2, flat),
+            "2x2 coefficient matrix",
+        )]
+    }
+    fn apply_configuration(&mut self, params: &[Parameter]) -> usize {
+        for p in params {
+            if let ("a", SignalValue::Matrix(2, 2, data)) = (p.name.as_str(), &p.value) {
+                if !all_finite(data) {
+                    return 0;
+                }
+                self.a = [[data[0], data[1]], [data[2], data[3]]];
+                return 1;
+            }
+        }
+        0
     }
 }
 

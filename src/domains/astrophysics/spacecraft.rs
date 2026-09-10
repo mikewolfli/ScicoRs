@@ -1,8 +1,8 @@
 //! Spacecraft trajectory design: Hohmann transfer, gravity assist, Lambert solver.
 
+use super::orbital::KeplerianElements;
 use crate::core::coord::Coord3D;
 use crate::core::types::Scalar;
-use super::orbital::KeplerianElements;
 
 /// Hohmann transfer Δv computation.
 /// Returns (Δv₁, Δv₂) for the two burns.
@@ -36,7 +36,9 @@ pub fn gravity_assist_delta_v(
         v_rel[0] * sin_t + v_rel[1] * cos_t,
         v_rel[2],
     ];
-    let scale = v_rel_mag / (v_out_rel[0] * v_out_rel[0] + v_out_rel[1] * v_out_rel[1] + v_out_rel[2] * v_out_rel[2]).sqrt();
+    let scale = v_rel_mag
+        / (v_out_rel[0] * v_out_rel[0] + v_out_rel[1] * v_out_rel[1] + v_out_rel[2] * v_out_rel[2])
+            .sqrt();
 
     [
         v_out_rel[0] * scale + planet_velocity[0] - v_inf_in[0],
@@ -47,31 +49,47 @@ pub fn gravity_assist_delta_v(
 
 /// Lambert problem solver (simplified): find velocity vectors for transfer between two points.
 pub fn lambert_solver(
-    r1: &Coord3D, r2: &Coord3D,
-    dt: Scalar, gm: Scalar, _prograde: bool,
+    r1: &Coord3D,
+    r2: &Coord3D,
+    dt: Scalar,
+    gm: Scalar,
+    _prograde: bool,
 ) -> Result<([Scalar; 3], [Scalar; 3]), String> {
     if dt <= 0.0 {
         return Err("Time of flight must be positive".to_string());
     }
-    let c = [
-        r2.x - r1.x, r2.y - r1.y, r2.z - r1.z,
-    ];
+    let c = [r2.x - r1.x, r2.y - r1.y, r2.z - r1.z];
     let r1_mag = (r1.x * r1.x + r1.y * r1.y + r1.z * r1.z).sqrt();
     let r2_mag = (r2.x * r2.x + r2.y * r2.y + r2.z * r2.z).sqrt();
     let c_mag = (c[0] * c[0] + c[1] * c[1] + c[2] * c[2]).sqrt();
 
     // Simplified: assume a parabolic transfer (energy = 0) as first guess
-    let p = (r1_mag * r2_mag * (1.0 - (c[0] * r1.x + c[1] * r1.y + c[2] * r1.z) / (r1_mag * r2_mag)).cos()) / c_mag;
+    let p = (r1_mag
+        * r2_mag
+        * (1.0 - (c[0] * r1.x + c[1] * r1.y + c[2] * r1.z) / (r1_mag * r2_mag)).cos())
+        / c_mag;
 
     let v1 = [
-        (gm / p).sqrt() * (-(r1.y * r2.z - r1.z * r2.y).signum() * c[2] / c_mag - (1.0 - r2_mag / p) * r1.x / r1_mag),
-        (gm / p).sqrt() * (-(r1.z * r2.x - r1.x * r2.z).signum() * c[0] / c_mag - (1.0 - r2_mag / p) * r1.y / r1_mag),
-        (gm / p).sqrt() * (-(r1.x * r2.y - r1.y * r2.x).signum() * c[1] / c_mag - (1.0 - r2_mag / p) * r1.z / r1_mag),
+        (gm / p).sqrt()
+            * (-(r1.y * r2.z - r1.z * r2.y).signum() * c[2] / c_mag
+                - (1.0 - r2_mag / p) * r1.x / r1_mag),
+        (gm / p).sqrt()
+            * (-(r1.z * r2.x - r1.x * r2.z).signum() * c[0] / c_mag
+                - (1.0 - r2_mag / p) * r1.y / r1_mag),
+        (gm / p).sqrt()
+            * (-(r1.x * r2.y - r1.y * r2.x).signum() * c[1] / c_mag
+                - (1.0 - r2_mag / p) * r1.z / r1_mag),
     ];
     let v2 = [
-        (gm / p).sqrt() * (-(r1.y * r2.z - r1.z * r2.y).signum() * c[2] / c_mag + (1.0 - r1_mag / p) * r2.x / r2_mag),
-        (gm / p).sqrt() * (-(r1.z * r2.x - r1.x * r2.z).signum() * c[0] / c_mag + (1.0 - r1_mag / p) * r2.y / r2_mag),
-        (gm / p).sqrt() * (-(r1.x * r2.y - r1.y * r2.x).signum() * c[1] / c_mag + (1.0 - r1_mag / p) * r2.z / r2_mag),
+        (gm / p).sqrt()
+            * (-(r1.y * r2.z - r1.z * r2.y).signum() * c[2] / c_mag
+                + (1.0 - r1_mag / p) * r2.x / r2_mag),
+        (gm / p).sqrt()
+            * (-(r1.z * r2.x - r1.x * r2.z).signum() * c[0] / c_mag
+                + (1.0 - r1_mag / p) * r2.y / r2_mag),
+        (gm / p).sqrt()
+            * (-(r1.x * r2.y - r1.y * r2.x).signum() * c[1] / c_mag
+                + (1.0 - r1_mag / p) * r2.z / r2_mag),
     ];
     Ok((v1, v2))
 }
@@ -99,7 +117,11 @@ pub fn launch_window(
 }
 
 /// Station-keeping Δv budget.
-pub fn station_keeping_budget(semi_major: Scalar, drag_perturbation: Scalar, duration: Scalar) -> Scalar {
+pub fn station_keeping_budget(
+    semi_major: Scalar,
+    drag_perturbation: Scalar,
+    duration: Scalar,
+) -> Scalar {
     let v_orb = (super::physics::EARTH_GM / semi_major).sqrt();
     drag_perturbation * v_orb * duration / 2.0
 }
@@ -116,7 +138,8 @@ pub fn rendezvous_maneuver(
     let phase_time = if period_diff.abs() < 1.0 {
         return Err("Already in same orbit".to_string());
     } else {
-        (target_oe.true_anomaly - chaser_oe.true_anomaly).abs() * target_oe.period(gm) / (2.0 * std::f64::consts::PI)
+        (target_oe.true_anomaly - chaser_oe.true_anomaly).abs() * target_oe.period(gm)
+            / (2.0 * std::f64::consts::PI)
     };
 
     let r_chaser = chaser_oe.periapsis_distance();
@@ -134,9 +157,9 @@ pub fn rendezvous_maneuver(
 
 #[cfg(test)]
 mod tests {
+    use super::super::physics::{EARTH_GM, EARTH_RADIUS};
     use super::*;
     use crate::core::coord::Coord3D;
-    use super::super::physics::{EARTH_GM, EARTH_RADIUS};
 
     #[test]
     fn test_hohmann_transfer() {

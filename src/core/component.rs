@@ -372,7 +372,9 @@ mod tests {
 
         template.internal_diagram.add_block(Box::new(src));
         template.internal_diagram.add_block(Box::new(sink));
-        template.internal_diagram.add_link(Link::new("l1", "src", "out", "sink", "in"));
+        template
+            .internal_diagram
+            .add_link(Link::new("l1", "src", "out", "sink", "in"));
         template.internal_diagram.compute_execution_order();
 
         template.map_port("ext_in", "sink", "in");

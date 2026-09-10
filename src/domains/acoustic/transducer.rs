@@ -15,8 +15,24 @@ pub struct Loudspeaker {
 }
 
 impl Loudspeaker {
-    pub fn new(sd: Scalar, mms: Scalar, cms: Scalar, rms: Scalar, bl: Scalar, re: Scalar, le: Scalar) -> Self {
-        Self { sd, mms, cms, rms, bl, re, le }
+    pub fn new(
+        sd: Scalar,
+        mms: Scalar,
+        cms: Scalar,
+        rms: Scalar,
+        bl: Scalar,
+        re: Scalar,
+        le: Scalar,
+    ) -> Self {
+        Self {
+            sd,
+            mms,
+            cms,
+            rms,
+            bl,
+            re,
+            le,
+        }
     }
 
     /// Fundamental resonance frequency: fₛ = 1/(2π·√(Mms·Cms)).
@@ -77,7 +93,10 @@ pub struct Microphone {
 
 impl Microphone {
     pub fn new(sensitivity: Scalar) -> Self {
-        Self { sensitivity, frequency_response: Vec::new() }
+        Self {
+            sensitivity,
+            frequency_response: Vec::new(),
+        }
     }
 
     pub fn output_voltage(&self, sound_pressure_pa: Scalar) -> Scalar {
@@ -112,7 +131,11 @@ pub struct Accelerometer {
 
 impl Accelerometer {
     pub fn new(sensitivity: Scalar, resonant_freq: Scalar, damping_ratio: Scalar) -> Self {
-        Self { sensitivity, resonant_freq, damping_ratio }
+        Self {
+            sensitivity,
+            resonant_freq,
+            damping_ratio,
+        }
     }
 
     /// Output voltage for given acceleration (in g).

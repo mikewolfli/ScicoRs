@@ -79,7 +79,11 @@ pub fn axial_stress(force: Scalar, area: Scalar) -> Scalar {
 }
 
 /// Bending stress: σ = M·y / I.
-pub fn bending_stress(moment: Scalar, distance_from_neutral_axis: Scalar, moment_of_inertia: Scalar) -> Scalar {
+pub fn bending_stress(
+    moment: Scalar,
+    distance_from_neutral_axis: Scalar,
+    moment_of_inertia: Scalar,
+) -> Scalar {
     if moment_of_inertia <= 0.0 {
         return 0.0;
     }

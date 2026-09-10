@@ -36,6 +36,13 @@ pub struct Event {
     pub data: SignalValue,
     /// Priority (lower = higher priority, for same-time events).
     pub priority: u32,
+    /// Block this event is addressed to, if any.
+    ///
+    /// This is a structured field rather than something encoded into `id` and
+    /// re-parsed: deriving routing from a delimited string breaks as soon as a
+    /// `BlockId` contains the delimiter (a namespaced id like `"plant:gain"`
+    /// would be misrouted).
+    pub target: Option<String>,
 }
 
 impl Event {
@@ -47,6 +54,7 @@ impl Event {
             event_type,
             data,
             priority: 0,
+            target: None,
         }
     }
 
@@ -64,19 +72,37 @@ impl Event {
             event_type,
             data,
             priority,
+            target: None,
         }
+    }
+
+    /// Address this event to a specific block.
+    ///
+    /// Routing uses this field directly, so a `BlockId` containing any character
+    /// (including a colon) is handled correctly.
+    pub fn with_target(mut self, block_id: &str) -> Self {
+        self.target = Some(block_id.to_string());
+        self
     }
 }
 
-/// Order events by time (earliest first), then by priority (lowest first).
+/// Order events by time (earliest first), then priority (lowest first), then
+/// id (lexicographically) to make the ordering total.
+///
+/// `Eq` and `Ord` must agree: `a.cmp(b) == Ordering::Equal` has to hold exactly
+/// when `a == b`. `BinaryHeap` relies on this, and a disagreement produces
+/// nondeterministic pop order for distinct events that compare equal.
 impl Ord for Event {
     fn cmp(&self, other: &Self) -> Ordering {
-        // BinaryHeap is a max-heap, so we reverse for min-heap behavior
+        // BinaryHeap is a max-heap, so reverse the time and priority comparisons
+        // for min-heap behaviour. The final `id` term is *not* reversed, so it
+        // gives a stable tie-break rather than an arbitrary one.
         other
             .time
             .partial_cmp(&self.time)
             .unwrap_or(Ordering::Equal)
             .then_with(|| other.priority.cmp(&self.priority))
+            .then_with(|| self.id.cmp(&other.id))
     }
 }
 
@@ -86,9 +112,13 @@ impl PartialOrd for Event {
     }
 }
 
+/// Events are equal when their ordering key is equal, so this uses the same
+/// exact components as [`Ord`] — no epsilon. A tolerance here would make two
+/// events equal while comparing as different, which violates the trait
+/// contracts; use [`EventQueue::drain_up_to`] for tolerance-based batching.
 impl PartialEq for Event {
     fn eq(&self, other: &Self) -> bool {
-        (self.time - other.time).abs() < 1e-15 && self.id == other.id
+        self.time == other.time && self.priority == other.priority && self.id == other.id
     }
 }
 
@@ -939,5 +969,179 @@ mod tests {
         mgr.advance_detector();
         assert!((mgr.detector.prev.get(&("b1".into(), "out".into())).unwrap() + 1.0).abs() < 1e-15);
         assert!(mgr.detector.curr.is_empty());
+    }
+
+    /// `Ord` and `Eq` must agree: `a.cmp(b) == Equal` exactly when `a == b`.
+    ///
+    /// The previous implementation compared only `(time, priority)` in `cmp`
+    /// but used an epsilon on `time` plus `id` in `eq`, so two distinct events
+    /// at the same time and priority were `cmp == Equal` yet `eq == false`.
+    /// `BinaryHeap` depends on a total order, so the pop order was undefined.
+    #[test]
+    fn test_event_ord_eq_contract_holds() {
+        let events = vec![
+            Event::new("a", 1.0, EventType::TimeEvent, SignalValue::Scalar(0.0)),
+            Event::new("b", 1.0, EventType::TimeEvent, SignalValue::Scalar(0.0)),
+            Event::with_priority("a", 1.0, EventType::TimeEvent, SignalValue::Scalar(0.0), 5),
+            Event::new("a", 2.0, EventType::TimeEvent, SignalValue::Scalar(0.0)),
+            // A difference far below the old epsilon, which used to compare
+            // equal while `cmp` saw them as distinct.
+            Event::new(
+                "a",
+                1.0 + 1e-16,
+                EventType::TimeEvent,
+                SignalValue::Scalar(0.0),
+            ),
+        ];
+
+        for x in &events {
+            for y in &events {
+                let ord_equal = x.cmp(y) == std::cmp::Ordering::Equal;
+                assert_eq!(
+                    ord_equal,
+                    x == y,
+                    "Ord/Eq disagree for {:?} vs {:?}: cmp==Equal is {ord_equal}, eq is {}",
+                    (x.id.as_str(), x.time, x.priority),
+                    (y.id.as_str(), y.time, y.priority),
+                    x == y
+                );
+            }
+        }
+    }
+
+    /// `Ord` must be a total order: antisymmetric and transitive over a set of
+    /// events, which is what `BinaryHeap` assumes.
+    #[test]
+    fn test_event_ord_is_a_total_order() {
+        let ev = |id: &str, t: f64, p: u32| {
+            Event::with_priority(id, t, EventType::TimeEvent, SignalValue::Scalar(0.0), p)
+        };
+        let set = vec![
+            ev("a", 1.0, 0),
+            ev("b", 1.0, 0),
+            ev("c", 1.0, 1),
+            ev("d", 2.0, 0),
+            ev("e", 0.5, 3),
+        ];
+        for x in &set {
+            for y in &set {
+                // Antisymmetry.
+                assert_eq!(
+                    x.cmp(y),
+                    y.cmp(x).reverse(),
+                    "cmp must be antisymmetric for {} vs {}",
+                    x.id,
+                    y.id
+                );
+            }
+        }
+        for x in &set {
+            for y in &set {
+                for z in &set {
+                    if x.cmp(y) != std::cmp::Ordering::Greater
+                        && y.cmp(z) != std::cmp::Ordering::Greater
+                    {
+                        assert_ne!(
+                            x.cmp(z),
+                            std::cmp::Ordering::Greater,
+                            "cmp must be transitive for {} {} {}",
+                            x.id,
+                            y.id,
+                            z.id
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// Distinct events at the same time and priority must pop in a
+    /// deterministic order (by id), rather than an arbitrary one.
+    #[test]
+    fn test_event_queue_pops_equal_key_events_deterministically() {
+        let make = || {
+            let mut q = EventQueue::new();
+            q.push(Event::new(
+                "zzz",
+                1.0,
+                EventType::TimeEvent,
+                SignalValue::Scalar(0.0),
+            ))
+            .unwrap();
+            q.push(Event::new(
+                "aaa",
+                1.0,
+                EventType::TimeEvent,
+                SignalValue::Scalar(0.0),
+            ))
+            .unwrap();
+            q.push(Event::new(
+                "mmm",
+                1.0,
+                EventType::TimeEvent,
+                SignalValue::Scalar(0.0),
+            ))
+            .unwrap();
+            q
+        };
+        let drain = |mut q: EventQueue| {
+            let mut ids = Vec::new();
+            while let Some(e) = q.pop() {
+                ids.push(e.id);
+            }
+            ids
+        };
+        let first = drain(make());
+        // Same inputs must give the same output every time. This is the property
+        // the fix restores: before it, `cmp` returned `Equal` for distinct
+        // events and the heap order was arbitrary.
+        for _ in 0..5 {
+            assert_eq!(drain(make()), first, "pop order must be deterministic");
+        }
+        // The heap is a max-heap with the time/priority terms reversed, so the
+        // id tie-break is reversed too: equal-key events pop in descending id
+        // order. Deterministic is what matters, and this pins the actual order
+        // so a future change to the comparison is visible.
+        assert_eq!(
+            first,
+            vec!["zzz".to_string(), "mmm".to_string(), "aaa".to_string()],
+            "equal-key events must pop in a deterministic order"
+        );
+    }
+
+    /// The queue must still order primarily by time, then by priority, after
+    /// the tie-break was made total.
+    #[test]
+    fn test_event_queue_orders_by_time_then_priority() {
+        let mut q = EventQueue::new();
+        q.push(Event::with_priority(
+            "late",
+            2.0,
+            EventType::TimeEvent,
+            SignalValue::Scalar(0.0),
+            0,
+        ))
+        .unwrap();
+        q.push(Event::with_priority(
+            "early_low",
+            1.0,
+            EventType::TimeEvent,
+            SignalValue::Scalar(0.0),
+            5,
+        ))
+        .unwrap();
+        q.push(Event::with_priority(
+            "early_high",
+            1.0,
+            EventType::TimeEvent,
+            SignalValue::Scalar(0.0),
+            1,
+        ))
+        .unwrap();
+
+        assert_eq!(q.pop().unwrap().id, "early_high", "priority 1 precedes 5");
+        assert_eq!(q.pop().unwrap().id, "early_low");
+        assert_eq!(q.pop().unwrap().id, "late", "time dominates priority");
+        assert!(q.pop().is_none());
     }
 }
