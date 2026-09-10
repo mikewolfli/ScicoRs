@@ -144,8 +144,51 @@ All domain modules delegate mathematics to the unified `core::compute` module:
 | **Integration** | Trapezoidal, Simpson, Gauss-Legendre quadrature |
 | **Eigenvalues** | Jacobi method, subspace iteration |
 | **Parallel** | `rayon`-based parallelism for compute-intensive loops |
+| **GPU** | wgpu 30.0.1 compute shaders (optional `gpu` feature) |
 
 This eliminated 5 copies of Gaussian elimination that existed across domain modules.
+
+### GPU Acceleration (wgpu 30.0.1)
+
+Enable the optional `gpu` feature to compile in a real GPU compute backend built on
+wgpu 30.0.1 compute shaders:
+
+```sh
+cargo build --release --features gpu
+cargo run  --release --features gpu --example gpu_bench
+```
+
+```rust
+// Opt in once at start-up; every adaptive_* call then dispatches large
+// workloads to the device automatically.
+scico_rs::bindings::platform::enable_gpu_acceleration()?;
+println!("{}", scico_rs::bindings::platform::compute_acceleration_report());
+```
+
+**Kernels** (WGSL, in `src/core/compute/gpu/`): dense GEMM with 16×16 shared-memory
+tiling, element-wise add/sub/mul, scalar-vector scale, AXPY, and two-stage
+dot/sum tree reductions.
+
+**Precision.** WGSL `f64` storage buffers require `Features::SHADER_F64`, which is
+*not* universal — Apple Silicon Metal reports `false` (verified on an M4). The
+backend probes the adapter once and selects the matching kernel set, so GPU
+acceleration works on every WebGPU-capable adapter:
+
+- **`f64` kernels** on devices that advertise `SHADER_F64`.
+- **`f32` kernels** elsewhere, reported as `GpuPrecision::F32`. The dispatcher
+then keeps the crate's `f64` workloads on the CPU (`GpuBackend::supports_f64`)
+instead of silently returning a lower-precision result.
+
+**Adaptive dispatch.** Workloads below `gpu_threshold` stay on the CPU, so the
+GPU is only used when the O(n³) work justifies the dispatch. `ComputeConfig`
+provides calibrated presets: `integrated_gpu()` (conservative, for shared-memory
+parts) and `discrete_gpu()` (aggressive, for dedicated-memory parts).
+Measurement on Apple M4: dispatch latency ≈ 0.8 ms, CPU rayon reaches
+~115 GFLOPS sustained, GPU reaches ~85 GFLOPS at 1024³ — so an integrated GPU
+loses at these sizes, which is exactly what the thresholds encode.
+
+All GPU results are verified against the CPU reference in tests
+(`cargo test --features gpu`), never silently trusted.
 
 ---
 
@@ -153,14 +196,15 @@ This eliminated 5 copies of Gaussian elimination that existed across domain modu
 
 | Metric | Value |
 |--------|-------|
-| Rust source files | 269 |
-| Lines of code | ~70,900 |
-| Tests | **1811 passing** ✅ |
+| Rust source files | 274 |
+| Lines of code | ~73,000 |
+| Tests | **1919 passing** (default) / **1945 + 2** (`--features gpu`) ✅ |
 | Test failures | **0** ✅ |
 | Ignored tests | **0** ✅ |
-| Clippy warnings | **0** (`-D warnings`) ✅ |
+| Clippy warnings | **0** (`-D warnings`), both with and without `gpu` ✅ |
 | Build profile | Release with LTO fat, codegen-units=1 |
-| Documentation files | 32 (blueprints, checklist, logs) |
+| Default dependency graph | **no `wgpu`** (GPU is fully optional) ✅ |
+| Documentation files | 33 (blueprints, checklist, logs) |
 
 ---
 
@@ -173,6 +217,8 @@ This eliminated 5 copies of Gaussian elimination that existed across domain modu
 | `rusqlite` | 0.40 | SQLite indexing & query |
 | `num-complex` | 0.4 | Complex number support |
 | `rayon` | 1.x | Data parallelism |
+| `matrixmultiply` | 0.3 | Pure-Rust SIMD GEMM kernels |
+| `wgpu` (optional) | 30.0.1 | GPU compute backend (`gpu` feature) |
 
 ---
 

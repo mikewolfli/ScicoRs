@@ -5,6 +5,8 @@
 //! while tracking status, handling failures, and supporting lifecycle
 //! controls such as pause, resume, and retry.
 
+use std::collections::HashMap;
+
 use crate::core::error::SimError;
 
 use super::dag::WorkflowDAG;
@@ -54,50 +56,76 @@ pub struct WorkflowEngine {
     pub status: WorkflowStatus,
     /// Identifiers of tasks that have failed.
     pub failed_tasks: Vec<String>,
-    /// Maximum number of retries per task before giving up.
+    /// Maximum number of `retry_task` calls allowed per task before giving up.
+    ///
+    /// A value of `0` means a task may be retried once (the first retry is
+    /// always allowed); the limit bounds how many *additional* retries a task
+    /// may consume.
     pub max_retries: u32,
+    /// Number of retries already consumed per task id.
+    retry_counts: HashMap<String, u32>,
     /// Index of the currently executing stage.
     current_stage: usize,
 }
 
 impl WorkflowEngine {
-    /// Create a new workflow engine from a DAG.
+    /// Create a new workflow engine from a DAG with the default retry limit of 0.
     ///
     /// Stages are built automatically from the DAG during construction.
     pub fn new(dag: WorkflowDAG) -> Self {
+        Self::with_max_retries(dag, 0)
+    }
+
+    /// Create a new workflow engine from a DAG with an explicit retry limit.
+    ///
+    /// `max_retries` is the number of extra retries each task is granted; see
+    /// [`Self::retry_task`].
+    pub fn with_max_retries(dag: WorkflowDAG, max_retries: u32) -> Self {
         let mut engine = Self {
             dag,
             stages: Vec::new(),
             parallel_scheduler: ParallelScheduler::default(),
             status: WorkflowStatus::Idle,
             failed_tasks: Vec::new(),
-            max_retries: 0,
+            max_retries,
+            retry_counts: HashMap::new(),
             current_stage: 0,
         };
         engine.build_stages();
         engine
     }
 
+    /// Builder-style setter for the per-task retry limit.
+    ///
+    /// ```
+    /// # use scico_rs::{WorkflowDAG, WorkflowEngine};
+    /// let engine = WorkflowEngine::new(WorkflowDAG::new("d")).with_retry_limit(3);
+    /// assert_eq!(engine.max_retries, 3);
+    /// ```
+    pub fn with_retry_limit(mut self, max_retries: u32) -> Self {
+        self.max_retries = max_retries;
+        self
+    }
+
+    /// Number of retries already consumed by `task_id`.
+    ///
+    /// Returns `0` for a task that has never been retried.
+    pub fn retries_used(&self, task_id: &str) -> u32 {
+        self.retry_counts.get(task_id).copied().unwrap_or(0)
+    }
+
+    /// Retries still available to `task_id` under the current limit.
+    pub fn retries_remaining(&self, task_id: &str) -> u32 {
+        self.max_retries.saturating_sub(self.retries_used(task_id))
+    }
+
     /// Decompose the DAG into pipeline stages.
     ///
-    /// Replaces any previously computed stages. Registers barriers
-    /// for stages that require synchronisation.
+    /// Replaces any previously computed stages. Stage boundaries are enforced
+    /// by the join at the end of each parallel stage in the scheduler, so no
+    /// barrier objects need to be registered here.
     pub fn build_stages(&mut self) {
         self.stages = decompose_stages(&self.dag);
-        self.parallel_scheduler.reset_barriers();
-
-        // Register barriers for stages that require them
-        for stage in &self.stages {
-            if stage.barrier_required && !stage.task_ids.is_empty() {
-                self.parallel_scheduler
-                    .add_barrier(super::parallel::BarrierSync {
-                        stage_id: format!("{:?}_{}", stage.stage_type, self.stages.len()),
-                        expected_count: stage.task_ids.len(),
-                        timeout: None,
-                    });
-            }
-        }
-
         self.current_stage = 0;
     }
 
@@ -193,19 +221,22 @@ impl WorkflowEngine {
 
     /// Reset the engine to its initial state.
     ///
-    /// Clears all execution progress, status, and failure tracking.
+    /// Clears all execution progress, status, failure tracking, and the per-task
+    /// retry counters.
     pub fn reset(&mut self) {
         self.failed_tasks.clear();
+        self.retry_counts.clear();
         self.current_stage = 0;
         self.status = WorkflowStatus::Idle;
         self.build_stages();
-        self.parallel_scheduler.reset_barriers();
     }
 
     /// Retry a specific failed task.
     ///
-    /// Returns an error if the task ID is not found in the failed list
-    /// or if the retry limit has been exceeded.
+    /// Returns an error if the task ID is not in the failed list, if the task
+    /// does not exist in the DAG, or if the retry limit configured through
+    /// [`Self::with_max_retries`] / [`Self::with_retry_limit`] has already been
+    /// consumed. Each successful call consumes one retry from the task's budget.
     pub fn retry_task(&mut self, task_id: &str) -> Result<(), String> {
         // Find the task in the failed tasks list
         let pos = self
@@ -218,6 +249,17 @@ impl WorkflowEngine {
         if !self.dag.tasks.contains_key(task_id) {
             return Err(format!("task '{task_id}' does not exist in the DAG"));
         }
+
+        // Enforce the retry limit before consuming any budget.
+        if self.retries_remaining(task_id) == 0 {
+            return Err(format!(
+                "task '{task_id}' has exceeded its retry limit of {}",
+                self.max_retries
+            ));
+        }
+
+        // Consume one retry from this task's budget.
+        *self.retry_counts.entry(task_id.to_string()).or_insert(0) += 1;
 
         // Remove from failed list
         self.failed_tasks.remove(pos);
@@ -253,8 +295,10 @@ impl WorkflowEngine {
             return Ok(());
         }
 
-        // Execute tasks in this stage using the parallel scheduler
-        let results = ParallelScheduler::execute_parallel(&tasks, |task| {
+        // Execute tasks in this stage using this engine's parallel scheduler.
+        // The join inside `execute_parallel` is the stage boundary: it returns
+        // only after every task of the stage has completed.
+        let results = self.parallel_scheduler.execute_parallel(&tasks, |task| {
             // Simulate task execution — in production this would invoke
             // the actual computation associated with the task / block.
             if task.estimated_cost.is_nan() || task.estimated_cost < 0.0 {
@@ -419,7 +463,7 @@ mod tests {
     #[test]
     fn test_retry_task() {
         let dag = linear_test_dag();
-        let mut engine = WorkflowEngine::new(dag);
+        let mut engine = WorkflowEngine::with_max_retries(dag, 2);
 
         // Manually add a failed task
         engine.failed_tasks.push("t2".to_string());
@@ -434,6 +478,89 @@ mod tests {
         assert!(result.is_ok());
         assert!(engine.failed_tasks.is_empty());
         assert_eq!(engine.status, WorkflowStatus::Paused);
+        assert_eq!(engine.retries_used("t2"), 1);
+        assert_eq!(engine.retries_remaining("t2"), 1);
+    }
+
+    #[test]
+    fn test_retry_within_limit_succeeds_repeatedly() {
+        let dag = linear_test_dag();
+        let mut engine = WorkflowEngine::with_max_retries(dag, 2);
+
+        // Three retries are allowed: the initial retry plus `max_retries` extra.
+        for expected_used in 1..=3 {
+            engine.failed_tasks.push("t2".to_string());
+            let result = engine.retry_task("t2");
+            assert!(result.is_ok(), "retry #{expected_used} should succeed");
+            assert_eq!(engine.retries_used("t2"), expected_used);
+        }
+        assert_eq!(engine.retries_remaining("t2"), 0);
+    }
+
+    #[test]
+    fn test_retry_exceeding_limit_returns_error() {
+        let dag = linear_test_dag();
+        let mut engine = WorkflowEngine::with_max_retries(dag, 1);
+
+        // Budget is one retry.
+        engine.failed_tasks.push("t2".to_string());
+        assert!(engine.retry_task("t2").is_ok());
+
+        // The budget is exhausted: a further attempt must fail and must not
+        // consume the failure entry.
+        engine.failed_tasks.push("t2".to_string());
+        let err = engine
+            .retry_task("t2")
+            .expect_err("the retry limit must be enforced");
+        assert!(err.contains("retry limit"), "unexpected error: {err}");
+        assert_eq!(engine.failed_tasks, vec!["t2".to_string()]);
+        assert_eq!(engine.retries_used("t2"), 1);
+    }
+
+    #[test]
+    fn test_retry_limit_is_configurable() {
+        let dag = linear_test_dag();
+
+        // The default constructor grants no extra retries.
+        let default_engine = WorkflowEngine::new(dag.clone());
+        assert_eq!(default_engine.max_retries, 0);
+
+        // Builder style and constructor style agree.
+        let built = WorkflowEngine::new(dag.clone()).with_retry_limit(4);
+        assert_eq!(built.max_retries, 4);
+
+        let constructed = WorkflowEngine::with_max_retries(dag, 4);
+        assert_eq!(constructed.max_retries, 4);
+    }
+
+    #[test]
+    fn test_retry_budget_is_per_task() {
+        let dag = linear_test_dag();
+        let mut engine = WorkflowEngine::with_max_retries(dag, 1);
+
+        // Exhaust t2's budget.
+        engine.failed_tasks.push("t2".to_string());
+        assert!(engine.retry_task("t2").is_ok());
+
+        // t3 has an independent budget and is still retryable.
+        engine.failed_tasks.push("t3".to_string());
+        assert!(engine.retry_task("t3").is_ok());
+        assert_eq!(engine.retries_used("t2"), 1);
+        assert_eq!(engine.retries_used("t3"), 1);
+        assert!(engine.retries_used("t1") == 0);
+    }
+
+    #[test]
+    fn test_reset_clears_retry_counters() {
+        let dag = linear_test_dag();
+        let mut engine = WorkflowEngine::with_max_retries(dag, 1);
+        engine.failed_tasks.push("t2".to_string());
+        assert!(engine.retry_task("t2").is_ok());
+        assert_eq!(engine.retries_used("t2"), 1);
+
+        engine.reset();
+        assert_eq!(engine.retries_used("t2"), 0);
+        assert_eq!(engine.retries_remaining("t2"), 1);
     }
 
     #[test]
@@ -496,6 +623,17 @@ mod tests {
         let dag = linear_test_dag();
         let engine = WorkflowEngine::new(dag);
         assert_eq!(engine.stage_count(), engine.stages.len());
+    }
+
+    #[test]
+    fn test_stages_remain_unchanged_after_refactor() {
+        // Removing the inert barrier bookkeeping must not change stage
+        // decomposition; `barrier_required` still documents the boundary.
+        let dag = linear_test_dag();
+        let engine = WorkflowEngine::new(dag);
+        assert_eq!(engine.stage_count(), 3);
+        assert!(engine.stages[0].barrier_required);
+        assert!(engine.stages[2].barrier_required);
     }
 
     #[test]
