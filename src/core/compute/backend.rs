@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Adaptive compute backend with CPU (serial/parallel) and GPU dispatch.
 //!
 //! This module provides a unified execution abstraction for the heavy

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Differential-Algebraic Equation (DAE) solver.
 //!
 //! Provides a basic index-1 DAE solver using backward Euler discretization.

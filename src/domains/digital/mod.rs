@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Digital Logic & RTL Simulation (Phase 15).
 //!
 //! Provides extended logic gates, sequential elements, combinational logic

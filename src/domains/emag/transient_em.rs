@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Transient electromagnetic simulation: phasors, plane waves, FDTD 1D.
 
 use crate::core::coord::Coord3D;

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Simulation context — centralized time, mode, lifecycle, and shared data.
 //!
 //! The `SimContext` is the central nervous system of a running simulation.

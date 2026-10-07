@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! GPU adapter/device acquisition and capability reporting.
 //!
 //! All wgpu object creation happens here, once per backend, so the rest of the

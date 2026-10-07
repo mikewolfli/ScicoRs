@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Base-2 Cooley-Tukey Fast Fourier Transform.
 //!
 //! Provides forward and inverse FFT for real and complex sequences.

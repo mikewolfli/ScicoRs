@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Digital timing analysis utilities.
 //!
 //! Provides setup/hold timing analysis, critical path delay computation,

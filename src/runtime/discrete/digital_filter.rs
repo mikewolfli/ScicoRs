@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Digital signal processing filters for the discrete simulation runtime.
 //!
 //! Provides FIR (Finite Impulse Response) filters, IIR (Infinite Impulse

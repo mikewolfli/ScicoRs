@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 // SCIcoRS GPU kernels — WGSL compute shaders (float64 storage path).
 //
 // Loaded **only** when the selected adapter advertises `Features::SHADER_F64`

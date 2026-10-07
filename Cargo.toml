@@ -1,7 +1,37 @@
 [package]
 name = "scico_rs"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
+description = "SCIcoRS — a unified scientific-computing and simulation kernel: sparse & dense linear algebra, ODE/DAE solvers, mesh/field workflows, checkpointing, self-describing datasets, and numerical validation across 19 physics domains."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/mikewolfli/ScicoRs"
+homepage = "https://github.com/mikewolfli/ScicoRs"
+documentation = "https://docs.rs/scico_rs"
+readme = "README.md"
+rust-version = "1.87"
+keywords = [
+    "simulation",
+    "scientific-computing",
+    "numerical",
+    "ode",
+    "linear-algebra",
+]
+categories = [
+    "science",
+    "mathematics",
+    "simulation",
+]
+include = [
+    "/src/**/*.rs",
+    "/src/**/*.wgsl",
+    "/examples/**/*.rs",
+    "/Cargo.toml",
+    "/README.md",
+    "/README.zh-CN.md",
+    "/CHANGELOG.md",
+    "/LICENSE-MIT",
+    "/LICENSE-APACHE",
+]
 
 [dependencies]
 serde = { version = "1.0.229", features = ["derive"] }

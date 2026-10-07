@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Heat conduction solvers for 1D and 2D steady-state and transient problems.
 //!
 //! Provides Fourier's law, thermal resistance networks (series/parallel),

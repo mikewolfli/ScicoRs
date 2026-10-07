@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Simplified molecular docking scoring functions.
 //!
 //! Provides a docking score based on shape complementarity (Lennard-Jones

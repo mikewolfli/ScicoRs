@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Combustion and reactive flow models.
 //!
 //! Provides adiabatic flame temperature, laminar flame speed,

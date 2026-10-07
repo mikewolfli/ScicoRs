@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! SPICE-Level Analog Circuit Simulation (Phase 14).
 //!
 //! Provides Modified Nodal Analysis (MNA) matrix builder/solver, passive

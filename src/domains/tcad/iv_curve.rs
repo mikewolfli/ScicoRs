@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! IV/CV curve computation utilities for semiconductor devices.
 //!
 //! Provides functions to compute IV (current-voltage) and CV (capacitance-voltage)

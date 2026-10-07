@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Conjugate heat transfer solver (fluid–solid coupled).
 //!
 //! Models the coupled thermal interaction between a fluid flow and

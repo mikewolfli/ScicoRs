@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Fluid Dynamics & CFD Simulation (Phase 27).
 //!
 //! Provides fluid dynamics simulation models including Navier-Stokes

@@ -34,13 +34,16 @@ SCIcoRS 提供**单一架构**用于建模、仿真和数据管理，实现从�
 
 ```
 ┌────────────────────────────────────────────────────────────────┐
-│  bindings/   — Python API、插件系统、数据 I/O (STL/STEP/Mesh)        │
-│  postproc/   — 数据记录、可视化、报告、批处理、HIL                     │
+│  bindings/   — Python API、插件系统、C ABI、数据 I/O (STL/STEP/Mesh)  │
+│  cli/        — 命令行工具链（check/run/status/results/validate）     │
+│  validation/ — 基准、收敛研究、不变量、验证报告                       │
+│  postproc/   — 数据记录、可视化、报告、数据集、批处理、HIL             │
+│  analysis/   — 灵敏度、校准、不确定性、优化                          │
 │  coupling/   — 多物理场耦合总线、跨尺度映射                            │
 │  domains/    — 19 个领域专用仿真模块                                 │
 │  blocks/     — 标准模块库（信号源、数学运算、逻辑门...）               │
-│  runtime/    — 上下文、引擎、求解器、调度器、事件、状态管理            │
-│  core/       — Block、Port、Link、Diagram、类型、坐标、单位           │
+│  runtime/    — 上下文、引擎、求解器、调度器、事件、状态、检查点、弹性执行 │
+│  core/       — Block、Port、Link、Diagram、类型、坐标、单位、计算、网格   │
 └────────────────────────────────────────────────────────────────┘
 ```
 
@@ -126,9 +129,37 @@ SCIcoRS 提供**单一架构**用于建模、仿真和数据管理，实现从�
 
 #### `bindings/` — 跨平台与扩展系统
 - **Python** 脚本桩 — 运行仿真、读取信号、注册自定义模块、查询库
-- **插件系统** — 模块、求解器和后处理注册表，支持清单加载
+- **插件系统** — 模块、求解器和后处理注册表，支持清单加载、API 版本兼容校验与分阶段隔离加载
+- **C ABI** — 稳定的 `extern "C"` 外观层，不透明句柄、显式 `scico_free`、稳定错误码
 - **数据 I/O** — STEP/STL 网格导入/导出、通用网格格式
 - **平台** — OS 检测、路径规范化、云/分布式运行器
+
+#### `core::mesh/` — 网格、区域与场工作流
+- 拓扑契约（维度、单位、ID、连通性、边界面、区域标签）
+- 命名材料/边界区域，含结构性与质量校验
+- 节点/单元/面上的标量、向量、张量场，含守恒校验的跨网格映射
+- 误差指标 / 标记 / 细化接口，含具体三角形细化器
+- 与既有 STEP/STL/通用网格 I/O 的无损桥接（保留区域名与单位）
+
+#### `analysis/` — 灵敏度、校准、不确定性与优化
+- 数据契约：`ParameterSpec`、`ObservationSet`、`ObjectiveSpec`、`AnalysisResult`
+- 有限差分局部灵敏度与梯度排序
+- Levenberg–Marquardt 参数估计，含拟合诊断与逐次运行溯源
+- Monte-Carlo / 拉丁超立方不确定性，含可复现种子 RNG
+- 有界 Nelder–Mead 优化与全因子实验设计
+
+#### `validation/` — 数值验证与可信度基线
+- 带来源、精度标注与**具理由容差**的版本化基准
+- 收敛研究估计观测阶（数据不足时拒绝捏造）
+- 可注册物理不变量，含适用性与源汇项声明
+- 结果比较，将插值对齐误差与求解误差分开报告
+- 机器可读报告，分别统计 通过/失败/跳过/不适用
+
+#### `runtime/` — 检查点与弹性执行
+- 版本化、崩溃安全的原子检查点，含状态/事件/RNG/记录器快照
+- 模型/求解器/插件兼容性检查，不兼容检查点被拒绝并列出差异
+- 六种运行结束态（正常/取消/资源限制/数值失败/IO 失败/超时）
+- 协作式取消、资源预算、失败分类重试与退避
 
 ---
 
@@ -139,13 +170,46 @@ SCIcoRS 提供**单一架构**用于建模、仿真和数据管理，实现从�
 | 运算 | 实现 |
 |------|------|
 | **矩阵** | 乘法、转置、行列式、求逆、LU/Cholesky 分解 |
+| **稀疏** | COO/CSR/CSC、SpMV、CG/MINRES/GMRES(m)/BiCGSTAB、Jacobi/ILU(0) 预条件 |
+| **最小二乘** | Householder QR、截断 SVD、最小范数解、秩/条件数诊断 |
 | **向量** | 点积、叉积、范数、归一化、线性/样条插值 |
 | **FFT** | 基-2 Cooley-Tukey FFT，用于频谱分析 |
 | **积分** | 梯形、Simpson、Gauss-Legendre 数值积分 |
 | **特征值** | Jacobi 方法、子空间迭代 |
 | **并行** | 基于 `rayon` 的计算密集型循环并行化 |
+| **GPU** | wgpu 30.0.1 计算着色器（可选 `gpu` 特性）|
 
 这消除了跨领域模块存在的 5 份 Gaussian 消元副本。
+
+---
+
+## 科学计算工具链（BLUE13，阶段 35–41）
+
+除领域模型外，SCIcoRS 还提供真实科研工作流所需的通用数值能力，均已实现、
+测试且可观测，无任何桩代码：
+
+| 能力 | 模块 | 提供内容 |
+|------|------|----------|
+| **稀疏线性代数** | `core::compute::sparse` | COO/CSR/CSC、SpMV、CG/MINRES/GMRES(m)/BiCGSTAB（带显式停止原因）、预条件器、矩阵自由算子 |
+| **最小二乘** | `core::compute::least_squares` | Householder QR、单边 Jacobi SVD、最小范数解、秩/条件数诊断 |
+| **分析与不确定性** | `analysis` | 有限差分灵敏度、LM 校准、Monte-Carlo/拉丁超立方、有界优化、因子设计 |
+| **网格与场** | `core::mesh` | 拓扑、命名区域、质量校验、场映射（含守恒误差）、自适应细化、STEP/STL 桥接 |
+| **检查点与弹性** | `runtime::checkpoint`、`runtime::execution` | 崩溃安全原子检查点、兼容性检查、六态结束、取消、资源预算、重试 |
+| **自描述数据集** | `postproc::dataset` | 版本化清单、真实单位换算、分块原子写入、CRC-32、schema 迁移、CSV/JSON 适配 |
+| **数值验证** | `validation` | 带理由容差的基准、收敛阶研究、可注册不变量、对齐感知比较、四态报告 |
+| **工具链与绑定** | `cli`、`bindings` | 稳定退出码的 `scico` CLI、稳定 C ABI、插件兼容与诊断 |
+
+### 稳健数值求解
+
+迭代 Krylov 求解器绝不把失败报成成功：达到迭代上限返回
+`StopReason::MaxIterationsReached`，崩溃或停滞也会如实报告。算法/输入不匹配
+（如在非对称矩阵上用 CG）返回具体错误，而非默默切换方法。
+
+### 可信由构造保证
+
+验证工具链拒绝捏造信心：仅当数据支持时才报告收敛阶（数据不足或非单调时
+明确返回“非渐近”），基准容差必须附带理由，未执行项与已通过项分开统计。
+参见 `examples/validation_study.rs`（真实求解器贯穿完整验证流程）。
 
 ---
 
@@ -153,14 +217,15 @@ SCIcoRS 提供**单一架构**用于建模、仿真和数据管理，实现从�
 
 | 指标 | 数值 |
 |------|------|
-| Rust 源文件数 | 269 |
-| 代码行数 | ~70,900 |
-| 测试数 | **1811 通过** ✅ |
+| Rust 源文件数 | 300+ |
+| 代码行数 | ~90,000 |
+| 测试数 | **2529 通过**（默认）/ **2563**（`--features gpu`）✅ |
 | 测试失败 | **0** ✅ |
 | 忽略测试 | **0** ✅ |
-| Clippy 警告 | **0**（`-D warnings`）✅ |
+| Clippy 警告 | **0**（`-D warnings`），含/不含 `gpu` 均通过 ✅ |
 | 构建配置 | Release 模式，LTO fat，codegen-units=1 |
-| 文档文件数 | 32（蓝图、清单、日志） |
+| 默认依赖图 | **不含 `wgpu`**（GPU 完全可选）✅ |
+| 文档文件数 | 34（蓝图、清单、日志） |
 
 ---
 
@@ -173,6 +238,8 @@ SCIcoRS 提供**单一架构**用于建模、仿真和数据管理，实现从�
 | `rusqlite` | 0.40 | SQLite 索引与查询 |
 | `num-complex` | 0.4 | 复数支持 |
 | `rayon` | 1.x | 数据并行 |
+| `matrixmultiply` | 0.3 | 纯 Rust SIMD GEMM 内核 |
+| `wgpu`（可选） | 30.0.1 | GPU 计算后端（`gpu` 特性）|
 
 ---
 
@@ -192,6 +259,37 @@ SCIcoRS 提供**单一架构**用于建模、仿真和数据管理，实现从�
 **领域阶段（13-31）：** 全部 19 个领域模块完整实现，含计算逻辑、测试和零警告。
 
 **集成阶段（32-34）：** 耦合总线、后处理、绑定 —— 全部完成。
+
+**科学计算阶段（35-41，BLUE13）：** 稀疏线性代数，灵敏度/校准/不确定性/优化，
+网格与场工作流，检查点与弹性执行，自描述数据集，数值验证，以及 CLI/C ABI/插件
+工具链 —— 全部完成。详见[更新日志](CHANGELOG.md)与[开发日志](docs/log/log20261007-1.md)。
+
+---
+
+## 命令行工具
+
+`scico` 二进制驱动 CLI 库（成功返回 0，出错返回稳定的非零退出码）：
+
+```sh
+cargo build --release --bin scico
+
+scico check   project.json      # 校验项目配置、模型与输出路径
+scico run     project.json      # 一次性有界运行 → 结果数据集
+scico status  out/              # 查询运行状态 / 恢复点
+scico results out/              # 检视结果数据集清单
+scico cancel  out/ 0.5          # 取消运行并记录恢复点
+scico resume  project.json      # 恢复被取消的运行
+scico validate model diagram.json
+scico version
+```
+
+## 示例
+
+```sh
+cargo run --example validation_study   # 真实求解器贯穿基准 + 收敛 + 不变量
+cargo run --example gpu_bench          # CPU vs GPU GEMM 基准
+cargo run --example compute_bench      # 计算原语微基准
+```
 
 ---
 
@@ -238,8 +336,10 @@ println!("完成 {} 步，仿真时间 {}", summary.total_steps, summary.final_t
 
 双许可证，任选其一：
 
-- [MIT License](LICENSE-MIT) 或 [http://opensource.org/licenses/MIT](http://opensource.org/licenses/MIT)
-- [Apache License, Version 2.0](LICENSE-APACHE) 或 [http://www.apache.org/licenses/LICENSE-2.0](http://www.apache.org/licenses/LICENSE-2.0)
+- [MIT License](LICENSE-MIT)
+- [Apache License, Version 2.0](LICENSE-APACHE)
+
+SPDX 表达式为 `MIT OR Apache-2.0`。
 
 ---
 

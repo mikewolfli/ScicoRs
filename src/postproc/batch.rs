@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Batch simulation and parameter sweep.
 //!
 //! # What a "batch simulation" produces here
@@ -200,6 +202,50 @@ fn record_outputs(
             let last = series.last().copied().unwrap_or(Scalar::NAN);
             series.push(last);
         }
+    }
+}
+
+/// Load a diagram, apply a parameter vector to named block parameters, run a
+/// real bounded simulation, and extract one named output channel.
+///
+/// This is the public bridge used by the analysis layer
+/// ([`crate::analysis::simulation::DiagramFunction`]). It writes nothing to
+/// disk; it returns `(positions, values)` for the requested channel.
+///
+/// Errors (unreadable/invalid diagram, engine failure, unknown channel) are
+/// returned as `Err(String)` so the caller can record a failed evaluation
+/// rather than panic.
+pub fn run_diagram_bounded_public(
+    diagram_path: &str,
+    parameter_paths: &[String],
+    values: &[Scalar],
+    config: TimeConfig,
+    output_channel: &str,
+) -> Result<(Vec<Scalar>, Vec<Scalar>), String> {
+    if parameter_paths.len() != values.len() {
+        return Err(format!(
+            "parameter_paths length {} != values length {}",
+            parameter_paths.len(),
+            values.len()
+        ));
+    }
+    let mut diagram = load_diagram(diagram_path)?;
+    for (path, &val) in parameter_paths.iter().zip(values.iter()) {
+        if !apply_parameter(&mut diagram, path, val) {
+            return Err(format!(
+                "parameter '{}' was not found on any block (value {} not applied)",
+                path, val
+            ));
+        }
+    }
+    let outcome = run_diagram_bounded(diagram, config)?;
+    match outcome.signals.get(output_channel) {
+        Some(values) => Ok((outcome.times.clone(), values.clone())),
+        None => Err(format!(
+            "output channel '{}' not produced; available channels: {:?}",
+            output_channel,
+            outcome.signals.keys().collect::<Vec<_>>()
+        )),
     }
 }
 

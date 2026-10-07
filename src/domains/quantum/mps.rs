@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Matrix Product State (MPS) representation for efficient 1D quantum simulation.
 //!
 //! MPS is a tensor-network ansatz that represents a quantum state of n qubits

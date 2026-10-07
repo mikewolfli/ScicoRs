@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Compute pipelines and typed launch helpers for the SCIcoRS WGSL kernels.
 //!
 //! Pipelines are compiled once per device in [`GpuKernels::new`] and reused for

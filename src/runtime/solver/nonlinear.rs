@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Nonlinear equation solvers.
 //!
 //! Provides the Newton-Raphson method for solving systems of nonlinear

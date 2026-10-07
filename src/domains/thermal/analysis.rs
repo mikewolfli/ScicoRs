@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Thermal system analysis: heat sinks, heat pipes, radiators, cooling systems.
 //!
 //! Provides engineering analysis functions for thermal management design:

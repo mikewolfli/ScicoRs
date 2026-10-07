@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! PLC (Programmable Logic Controller) primitives for discrete logic simulation.
 //!
 //! Provides basic logic gates, RS and D flip-flops, and edge detectors.

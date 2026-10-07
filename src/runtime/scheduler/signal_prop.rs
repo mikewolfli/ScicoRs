@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Port signal propagation, caching, and synchronization.
 //!
 //! Provides the `SignalCache` for storing port signal values and the

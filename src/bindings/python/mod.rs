@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Python scripting interface for simulation control, block building, and data access.
 //!
 //! These functions form the Rust-side layer that a Python binding (via cffi /

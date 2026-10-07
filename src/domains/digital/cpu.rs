@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Simple CPU model for digital/RTL simulation.
 //!
 //! Implements a minimal RISC-like CPU with a 16-bit instruction set,

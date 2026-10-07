@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Orbital mechanics: Keplerian elements, two-body/N-body propagators.
 
 use super::celestial_body::CelestialBody;

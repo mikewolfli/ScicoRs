@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Contact mechanics: point-to-point distance, Hertzian contact,
 //! Coulomb friction, bolt preload, and constraint modelling.
 

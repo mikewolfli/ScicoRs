@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Hydraulics: open-channel, pressurised pipe, and transient flow models.
 //!
 //! Provides engineering formulas for Manning's open-channel flow,

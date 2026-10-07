@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Adaptive step-size ODE solvers using embedded Runge-Kutta methods.
 //!
 //! Provides three adaptive methods:

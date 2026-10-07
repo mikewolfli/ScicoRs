@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Aerospace mission analysis: L/D ratio, Breguet range equation,
 //! rate of climb, and wing loading.
 

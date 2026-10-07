@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Pure-Rust SIMD kernels — the single, audited acceleration boundary.
 //!
 //! These wrappers expose the `matrixmultiply` gemm kernels (the same

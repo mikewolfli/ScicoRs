@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! N-dimensional Tensor type for multi-dimensional array operations.
 //!
 //! Provides a generic dense tensor with shape tracking, indexing,

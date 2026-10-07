@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Wave optics: interference, diffraction, polarization, Gaussian beams.
 //!
 //! Provides models for double-slit/thin-film interference, single-slit/circular

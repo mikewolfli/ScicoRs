@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Navier-Stokes 2D incompressible solver using the projection method.
 //!
 //! Implements a finite-difference solver for the 2D incompressible

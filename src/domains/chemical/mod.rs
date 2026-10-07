@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Chemical Reactions & Process Engineering Simulation (Phase 24).
 //!
 //! Provides simulation models for chemical reaction engineering including

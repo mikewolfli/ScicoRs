@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! BJT Ebers-Moll model.
 //!
 //! Provides the Ebers-Moll large-signal BJT model for DC collector and

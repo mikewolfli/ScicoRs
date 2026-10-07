@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Physiological Systems & Biomedical Simulation (Phase 23).
 //!
 //! Provides models for tissue mechanics, hemodynamics, cardiac electrophysiology,

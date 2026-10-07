@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Basic noise analysis for circuit simulation.
 //!
 //! Provides noise power spectral density (PSD) calculations for

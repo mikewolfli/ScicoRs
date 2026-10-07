@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Nonlinear finite-element solver using the Newton-Raphson method.
 //!
 //! Extends the linear `FemSystem` with support for geometric nonlinearity

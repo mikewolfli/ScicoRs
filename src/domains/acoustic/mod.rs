@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Acoustics & Vibration Simulation (Phase 19).
 //!
 //! Provides sound field propagation (air/water/ultrasound), vibration and

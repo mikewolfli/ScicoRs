@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Unified Database System (Phase 12).
 //!
 //! Provides a TOML + SQLite hybrid storage system for simulation libraries.

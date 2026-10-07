@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! STEP file import/export (AP203 subset).
 //!
 //! Supports points, lines, circles, B-spline curves, faces, and shells.

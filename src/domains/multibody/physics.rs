@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Multibody physics constants and rigid-body material properties.
 //!
 //! Provides the standard gravitational acceleration vector and a

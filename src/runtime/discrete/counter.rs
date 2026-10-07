@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Counters and timers for discrete-time logic / PLC simulation.
 //!
 //! - `Counter`: an up, down, or up-down hardware counter with preset.

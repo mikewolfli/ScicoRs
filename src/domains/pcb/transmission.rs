@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! PCB transmission line models: microstrip, stripline, CPW, S-parameters.
 
 use crate::core::types::Scalar;

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! 3D transient heat conduction solver using the Alternating Direction Implicit
 //! (ADI) method and steady-state Successive Over-Relaxation (SOR).
 //!

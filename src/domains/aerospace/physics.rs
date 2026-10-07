@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Aerospace physical constants and ISA (International Standard Atmosphere) model.
 //!
 //! Provides the `IsaAtmosphere` struct with static methods for computing atmospheric

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Multi-phase flow simulation using the Volume-of-Fluid (VOF) method.
 #![allow(clippy::too_many_arguments)]
 //!

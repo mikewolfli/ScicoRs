@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Photoelectric conversion: photodetectors, solar cells, optoelectronic coupling.
 
 use crate::core::block::{Block, BlockError, BlockId};

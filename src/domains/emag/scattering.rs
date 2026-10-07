@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Radar cross-section (RCS) computation from 3D FDTD simulations.
 //!
 //! Computes mono-static and bi-static RCS by transforming near-field

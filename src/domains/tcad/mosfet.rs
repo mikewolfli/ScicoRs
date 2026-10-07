@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! MOSFET DC/AC models (Shichman-Hodges Level 1).
 //!
 //! Provides the Shichman-Hodges (Level 1) MOSFET model for DC drain current,

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! BLAS / LAPACK-style dense linear algebra with adaptive CPU/GPU dispatch.
 //!
 //! This module mirrors the numpy/MKL `linalg` API surface: BLAS level-1/2

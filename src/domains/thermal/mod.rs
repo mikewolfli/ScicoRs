@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Thermodynamics & Heat Transfer Simulation (Phase 26).
 //!
 //! Provides heat conduction solvers (1D/2D steady and transient), convection

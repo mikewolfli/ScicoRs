@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Core scheduler trait and supporting types.
 //!
 //! Defines the `Scheduler` interface that all scheduling strategies implement,

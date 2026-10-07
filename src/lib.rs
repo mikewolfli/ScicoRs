@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! SCIcoRS — Unified Simulation Kernel for All Humanity
 //!
 //! A universal simulation kernel designed to unify all engineering and
@@ -34,12 +36,15 @@ pub mod core;
 pub mod runtime;
 
 // Top-level modules (all fully implemented and active).
+pub mod analysis;
 pub mod bindings;
 pub mod blocks;
+pub mod cli;
 pub mod coupling;
 pub mod db;
 pub mod domains;
 pub mod postproc;
+pub mod validation;
 
 // Re-export commonly used types at the crate root for convenience.
 pub use core::block::{Block, BlockError, SimpleBlock};
@@ -268,6 +273,53 @@ pub use domains::quantum::{
     VqeOptimizer, VqeSolver, cnot_matrix, hadamard_matrix, pauli_x_matrix, pauli_y_matrix,
     pauli_z_matrix, pure_state_density, rotation_x, rotation_y, rotation_z, swap_matrix,
     toffoli_matrix,
+};
+
+// Re-export the user-facing CLI toolchain (Phase 41) at the crate root.
+pub use cli::{
+    ApiVersionSpec, CliCommand, CliParseError, CommandOutcome, ExitCode, ProjectConfig,
+    ProjectError, cancel_run, cli_main, dispatch, execute, inspect_results, parse_command,
+    query_run_status, resume_run, run_project, validate_dataset, validate_dataset_compatibility,
+    validate_library, validate_model, validate_plugin,
+};
+
+// Re-export sparse linear algebra (Phase 35) key types.
+pub use core::compute::least_squares::{
+    LeastSquaresDiagnostics, LeastSquaresError, LeastSquaresSolution, pseudo_inverse, solve_qr,
+    solve_svd,
+};
+pub use core::compute::sparse::{
+    CooMatrix, CscMatrix, CsrMatrix, DiagonalScaling, IdentityPreconditioner, Ilu0Preconditioner,
+    IterationStats, JacobiPreconditioner, KrylovConfig, KrylovSolution, LinearOperator,
+    Preconditioner, SparseError, StopReason, bicgstab, cg, condition_number_1norm, gmres, minres,
+    relative_residual_norm,
+};
+
+// Re-export the analysis layer (Phase 36) key types.
+pub use analysis::{
+    AnalysisResult, CalibrationProblem, FactorDesign, FactorLevel, FnSimulationFunction,
+    LossFunction, ObjectiveSpec, ObservationSet, OptimizerConfig, OptimizerResult,
+    OptimizerStopReason, ParameterSpec, SamplePlan, SamplingScheme, SeededRng, SimulationFunction,
+    SimulationRecord, UncertaintyConfig, UncertaintyResult, calibrate, finite_difference_gradient,
+    local_sensitivity, monte_carlo, nelder_mead,
+};
+
+// Re-export mesh types (Phase 37) key types.
+pub use core::mesh::{
+    ElementType, FieldData, FieldLocation, MeshDimension, MeshError, MeshTopology, Region,
+    RegionRegistry,
+};
+
+// Re-export checkpoint & elastic execution (Phase 38) key types.
+pub use runtime::{
+    CancellationToken, CheckpointError, CheckpointManifest, CheckpointStore, Compatibility,
+    CompatibilityPolicy, FailureKind, ModelSignature, ResourceBudget, ResourceTracker, RetryPolicy,
+    RunOutcome, SimulationSnapshot,
+};
+
+// Re-export the validation toolkit (Phase 40) key types.
+pub use validation::{
+    Benchmark, BenchmarkCategory, ConvergenceStudy, InvariantRegistry, Tolerance, ValidationReport,
 };
 
 // Re-export postproc (Phase 33) key types

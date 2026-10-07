@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Fundamental data types used throughout the simulation kernel.
 //!
 //! This module defines core numeric types, signal value representations,

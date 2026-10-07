@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Pipeline stages — decomposition of a workflow DAG into execution stages.
 //!
 //! A pipeline stage groups tasks that can (optionally) execute in parallel.

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Cell Culture & Tissue Growth Simulation (Phase 17).
 //!
 //! Provides simulation models for cell culture and tissue growth including

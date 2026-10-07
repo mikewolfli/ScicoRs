@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Finite-element solver: static, modal, and buckling analysis.
 //!
 //! Assembles global stiffness/mass matrices from element contributions,

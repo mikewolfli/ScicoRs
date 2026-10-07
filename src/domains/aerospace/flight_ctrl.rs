@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Flight control: 6DOF rigid-body dynamics, quaternion kinematics,
 //! autopilot (PID), and trim solution.
 

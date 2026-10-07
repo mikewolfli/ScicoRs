@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Power converter topologies: Buck, Boost, inverter, rectifier, PWM.
 
 use super::devices::PowerMosfet;

@@ -34,13 +34,18 @@ SCIcoRS provides a **single architecture** for modeling, simulation, and data ma
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  bindings/   — Python API, Plugin system, Data I/O (STL/STEP/Mesh) │
-│  postproc/   — Recording, Visualization, Reporting, Batch, HIL    │
+│  bindings/   — Python API, Plugin system, C ABI, Data I/O (STL/STEP/Mesh) │
+│  cli/        — Command-line toolchain (check/run/status/results/validate) │
+│  validation/ — Benchmarks, convergence studies, invariants, reports       │
+│  postproc/   — Recording, Visualization, Reporting, Datasets, Batch, HIL  │
+│  analysis/   — Sensitivity, Calibration, Uncertainty, Optimization        │
 │  coupling/   — Multi-Physics Coupling Bus, Cross-Scale Mapping    │
 │  domains/    — 19 Domain-Specific Simulation Modules              │
 │  blocks/     — Standard Block Library (Sources, Math, Logic...)   │
-│  runtime/    — Context, Engine, Solvers, Scheduler, Events, State │
-│  core/       — Block, Port, Link, Diagram, Types, Coord, Units   │
+│  runtime/    — Context, Engine, Solvers, Scheduler, Events, State,  │
+│                Checkpoints, Elastic Execution                       │
+│  core/       — Block, Port, Link, Diagram, Types, Coord, Units,    │
+│                Compute (sparse/dense), Mesh                        │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -126,9 +131,37 @@ Unified coupling bus enabling cross-domain and cross-scale co-simulation.
 
 #### `bindings/` — Cross-Platform & Extension System
 - **Python** scripting stubs — run simulation, read signals, register custom blocks, query library
-- **Plugin** system — block, solver, and post-processor registries with manifest loading
+- **Plugin** system — block, solver, and post-processor registries with manifest loading, API-version compatibility checks and staged, isolated loading
+- **C ABI** — stable `extern "C"` facade with opaque handles, explicit `scico_free`, and stable error codes
 - **Data I/O** — STEP/STL mesh import/export, general mesh formats
 - **Platform** — OS detection, normalized paths, cloud/distributed runner
+
+#### `core::mesh/` — Mesh, Regions & Field Workflow
+- Topology contract (dimension, units, IDs, connectivity, boundary faces, region tags)
+- Named material/boundary regions with structural and quality validation
+- Node/cell/face scalar, vector and tensor fields with conservation-checked mapping
+- Error-indicator / mark / refine interface with a concrete triangle refiner
+- Lossless bridge to the existing STEP/STL/generic mesh I/O (region names + units preserved)
+
+#### `analysis/` — Sensitivity, Calibration, Uncertainty & Optimization
+- Data contracts: `ParameterSpec`, `ObservationSet`, `ObjectiveSpec`, `AnalysisResult`
+- Finite-difference local sensitivity with gradient ranking
+- Levenberg–Marquardt parameter estimation with fit diagnostics and run tracing
+- Monte-Carlo / Latin-hypercube uncertainty with a seeded reproducible RNG
+- Bounded Nelder–Mead optimization and full-factorial experiment design
+
+#### `validation/` — Numerical Validation & Credibility Baseline
+- Versioned benchmarks with sourced, precision-tagged reference values and justified tolerances
+- Convergence studies estimating the observed order (refuses to fabricate one)
+- Registrable physical invariants with declared applicability and source/sink terms
+- Result comparison separating alignment error from solver error
+- Machine-readable reports tracking passed / failed / skipped / not-applicable separately
+
+#### `runtime` — Checkpoints & Elastic Execution
+- Versioned, crash-safe atomic checkpoints with state/event/RNG/recorder snapshots
+- Model/solver/plugin compatibility checks that reject incompatible checkpoints
+- Six run outcomes (completed/cancelled/resource-limit/numerical-failure/I-O-failure/timeout)
+- Cooperative cancellation, resource budgets, and failure-classified retry with backoff
 
 ---
 
@@ -139,6 +172,8 @@ All domain modules delegate mathematics to the unified `core::compute` module:
 | Operation | Implementations |
 |-----------|----------------|
 | **Matrix** | Multiply, transpose, determinant, inverse, LU/Cholesky decomposition |
+| **Sparse** | COO/CSR/CSC, SpMV, CG/MINRES/GMRES(m)/BiCGSTAB, Jacobi/ILU(0) preconditioners |
+| **Least squares** | Householder QR, truncated SVD, minimum-norm solutions, rank/condition diagnostics |
 | **Vector** | Dot, cross, norm, normalization, linear/spline interpolation |
 | **FFT** | Base-2 Cooley-Tukey FFT for spectral analysis |
 | **Integration** | Trapezoidal, Simpson, Gauss-Legendre quadrature |
@@ -196,15 +231,57 @@ All GPU results are verified against the CPU reference in tests
 
 | Metric | Value |
 |--------|-------|
-| Rust source files | 274 |
-| Lines of code | ~73,000 |
-| Tests | **1919 passing** (default) / **1945 + 2** (`--features gpu`) ✅ |
+| Rust source files | 300+ |
+| Lines of code | ~90,000 |
+| Tests | **2529 passing** (default) / **2563** (`--features gpu`) ✅ |
 | Test failures | **0** ✅ |
 | Ignored tests | **0** ✅ |
 | Clippy warnings | **0** (`-D warnings`), both with and without `gpu` ✅ |
 | Build profile | Release with LTO fat, codegen-units=1 |
 | Default dependency graph | **no `wgpu`** (GPU is fully optional) ✅ |
-| Documentation files | 33 (blueprints, checklist, logs) |
+| Documentation files | 34 (blueprints, checklist, logs) |
+
+---
+
+## Scientific-Computing Toolkit (BLUE13, phases 35–41)
+
+Beyond the domain models, SCIcoRS ships the general-purpose numerical machinery
+a real research workflow needs. Everything below is implemented, tested, and
+observable — not a stub.
+
+| Capability | Module | What it provides |
+|-----------|--------|------------------|
+| **Sparse linear algebra** | `core::compute::sparse` | COO/CSR/CSC storage, SpMV, CG / MINRES / GMRES(m) / BiCGSTAB with explicit stop reasons, Jacobi / diagonal / ILU(0) preconditioners, matrix-free `LinearOperator` |
+| **Least squares** | `core::compute::least_squares` | Householder QR with column pivoting, truncated one-sided Jacobi SVD, minimum-norm solutions, rank/condition diagnostics |
+| **Analysis & UQ** | `analysis` | Finite-difference sensitivity, Levenberg–Marquardt calibration, Monte-Carlo / Latin-hypercube uncertainty, bounded Nelder–Mead optimization, factorial experiment design |
+| **Mesh & fields** | `core::mesh` | Topology, named regions, quality validation, node/cell/face fields, conservation-checked mapping, adaptive refinement, STEP/STL bridge |
+| **Checkpoints & resilience** | `runtime::checkpoint`, `runtime::execution` | Crash-safe atomic checkpoints, compatibility checks, six-state run outcomes, cancellation tokens, resource budgets, retry with backoff |
+| **Self-describing datasets** | `postproc::dataset` | Versioned manifests, real unit conversion, chunked atomic writes, CRC-32, schema migration, CSV/JSON adapters |
+| **Numerical validation** | `validation` | Sourced benchmarks with justified tolerances, convergence-order studies, registrable invariants, alignment-aware comparison, four-state reports |
+| **Toolchain & bindings** | `cli`, `bindings` | `scico` CLI with stable exit codes, stable C ABI, plugin compatibility & diagnostics |
+
+### Robust numerical solvers
+
+Iterative Krylov solvers never report success on failure: hitting the iteration
+cap returns `StopReason::MaxIterationsReached`, and a solve that breaks down or
+stagnates says so. Wrong-algorithm/input combinations (e.g. CG on an asymmetric
+matrix) return a specific error instead of silently switching methods.
+
+### Credibility by construction
+
+The validation toolkit refuses to fabricate confidence: a convergence order is
+only reported when the data support one (insufficient or non-monotonic
+data yields an explicit "not asymptotic"), a benchmark tolerance must carry a
+stated reason, and un-executed checks are tracked separately from passed ones.
+See `examples/validation_study.rs` for a real solver wired through the whole
+workflow.
+
+### Resilience by construction
+
+Checkpoints are written through a temporary directory and an atomic, crash-safe
+swap; a crash in the swap window still recovers the last valid checkpoint. A
+resumed run reproduces an uninterrupted run exactly (verified end-to-end against
+a real `SimEngine`).
 
 ---
 
@@ -238,6 +315,40 @@ See the [full checklist](docs/checklist/CHECKLIST.MD) for detailed progress on a
 **Domain Phases (13-31):** All 19 domains fully implemented with computation, tests, and zero warnings.
 
 **Integration Phases (32-34):** Coupling bus, post-processing, bindings — fully implemented.
+
+**Scientific-Computing Phases (35-41, BLUE13):** Sparse linear algebra, sensitivity/
+calibration/uncertainty/optimization, mesh & field workflows, checkpoints & elastic
+execution, self-describing datasets, numerical validation, and the CLI/C-ABI/plugin
+toolchain — fully implemented. See the [changelog](CHANGELOG.md) and
+[development log](docs/log/log20261007-1.md) for details.
+
+---
+
+## Command-Line Tool
+
+The `scico` binary drives the CLI library (stable, non-zero exit codes on error):
+
+```sh
+cargo build --release --bin scico
+
+scico check   project.json      # validate project config, model and output paths
+scico run     project.json      # one-shot bounded run → result dataset
+scico status  out/              # query run status / resume point
+scico results out/              # inspect a result dataset's manifest
+scico cancel  out/ 0.5          # cancel a run, recording a resume point
+scico resume  project.json      # resume a cancelled run
+scico validate model diagram.json
+scico validate plugin manifest.json 1.0
+scico version
+```
+
+## Examples
+
+```sh
+cargo run --example validation_study   # real solver through benchmark + convergence + invariants
+cargo run --example gpu_bench          # CPU vs GPU GEMM benchmark
+cargo run --example compute_bench      # compute-primitive micro-benchmarks
+```
 
 ---
 
@@ -282,12 +393,18 @@ println!("Completed {} steps in {} time units", summary.total_steps, summary.fin
 
 ## License
 
-Dual-licensed under either:
+Dual-licensed under either of:
 
-- [MIT License](LICENSE-MIT) or [http://opensource.org/licenses/MIT](http://opensource.org/licenses/MIT)
-- [Apache License, Version 2.0](LICENSE-APACHE) or [http://www.apache.org/licenses/LICENSE-2.0](http://www.apache.org/licenses/LICENSE-2.0)
+- [MIT License](LICENSE-MIT)
+- [Apache License, Version 2.0](LICENSE-APACHE)
 
-at your option.
+at your option. The SPDX expression is `MIT OR Apache-2.0`.
+
+### Contribution
+
+Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in this work, as defined in the Apache-2.0 license, shall be
+dual-licensed as above, without any additional terms or conditions.
 
 ---
 

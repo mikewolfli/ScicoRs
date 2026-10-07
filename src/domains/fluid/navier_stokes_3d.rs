@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! 3D incompressible Navier-Stokes solver using the projection method.
 //!
 //! Extends the 2D solver (`NavierStokes2D`) to three spatial dimensions

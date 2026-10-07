@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Parallel scheduler backed by a private rayon thread pool.
 //!
 //! Provides scheduling primitives for parallel task execution across pipeline

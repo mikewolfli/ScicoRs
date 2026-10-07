@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Molecular structure types and PDB I/O.
 //!
 //! Provides Atom, Bond, Residue, and Molecule structs for representing

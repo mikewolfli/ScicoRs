@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Cardiac electromechanical coupling model (simplified).
 use crate::core::types::Scalar;
 #[derive(Debug, Clone)]

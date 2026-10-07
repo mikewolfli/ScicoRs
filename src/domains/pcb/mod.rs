@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Board-Level Circuit & PCB System Simulation (Phase 20).
 //!
 //! Provides PCB transmission line models, power integrity (IR drop, ripple,

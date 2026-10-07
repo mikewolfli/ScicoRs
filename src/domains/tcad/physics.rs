@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Physical constants and carrier transport models for semiconductor TCAD.
 //!
 //! Provides fundamental physical constants, carrier mobility models,

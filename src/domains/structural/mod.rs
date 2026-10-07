@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Structural Mechanics & Finite Element FEA Simulation (Phase 25).
 //!
 //! Provides material mechanical properties, finite-element types (beam,

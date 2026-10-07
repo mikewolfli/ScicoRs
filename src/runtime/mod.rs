@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Simulation Runtime Layer
 //!
 //! The runtime layer drives simulation execution on top of the core data model.
@@ -49,3 +51,14 @@ pub use algebraic::{
 pub mod scheduler;
 // Phase 3: general numerical solver system (implemented in solver/)
 pub mod solver;
+// Phase 38: checkpointing and elastic execution
+pub mod checkpoint;
+pub mod execution;
+pub use checkpoint::{
+    CheckpointError, CheckpointManifest, CheckpointStore, Compatibility, CompatibilityPolicy,
+    ModelSignature, RunOutcome, SimulationSnapshot,
+};
+pub use execution::{
+    Backoff, CancellationToken, FailureKind, ResourceBudget, ResourceTracker, RetryError,
+    RetryPolicy, run_with_retry,
+};

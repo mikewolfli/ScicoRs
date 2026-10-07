@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Rigid body dynamics and quaternion rotation.
 //!
 //! Provides `RigidBody` (6-DOF rigid body with mass, inertia, position,

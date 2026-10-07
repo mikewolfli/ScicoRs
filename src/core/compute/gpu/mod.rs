@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! wgpu 30.0.1 compute backend — the real GPU acceleration path.
 //!
 //! This module implements [`GpuBackend`] on top of wgpu's WebGPU-style compute

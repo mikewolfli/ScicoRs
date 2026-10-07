@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Matrix operations — multiply, inverse, determinant, transpose, decompositions.
 //!
 //! All functions operate on `Vec<Vec<Scalar>>` (row-major dense storage).

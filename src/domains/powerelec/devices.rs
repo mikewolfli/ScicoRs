@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Power semiconductor device models: diode, MOSFET, IGBT, thyristor.
 
 use crate::core::types::Scalar;

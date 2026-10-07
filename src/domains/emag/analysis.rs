@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! EM analysis: eddy current, hysteresis, shielding, radar equation.
 
 use crate::core::types::Scalar;

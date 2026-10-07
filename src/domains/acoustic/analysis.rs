@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Acoustic analysis tools: A-weighting, RT60, FRF, damping, octave bands.
 
 use crate::core::types::Scalar;

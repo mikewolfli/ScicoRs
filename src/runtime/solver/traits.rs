@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Core solver trait, configuration, statistics, and result types.
 //!
 //! Defines the `OdeSolver` trait that all numerical ODE solvers implement,

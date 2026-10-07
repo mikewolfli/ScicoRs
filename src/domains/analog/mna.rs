@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Modified Nodal Analysis (MNA) matrix builder and solver.
 //!
 //! Implements the MNA formulation: `[G B; C D] * [v; i] = [s; e]`

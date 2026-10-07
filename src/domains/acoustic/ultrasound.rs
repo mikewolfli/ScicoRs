@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Ultrasound phased-array beamforming.
 //!
 //! Computes time delays for focusing and steering, and beam patterns.

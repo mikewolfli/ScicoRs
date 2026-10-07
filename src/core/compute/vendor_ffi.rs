@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Real vendor BLAS/LAPACK loading via `libloading` (dlopen) — the **second**
 //! audited `unsafe` boundary in the crate (the first is `simd.rs`).
 //!

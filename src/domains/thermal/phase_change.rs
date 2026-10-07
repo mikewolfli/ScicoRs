@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Phase change models: melting, solidification, and evaporation.
 //!
 //! Provides a 1D phase change solver using the effective heat capacity

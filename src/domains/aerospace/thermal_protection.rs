@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Thermal Protection System (TPS): multi-layer heat shield modeling,
 //! transient thermal response, and structural dynamics utilities.
 

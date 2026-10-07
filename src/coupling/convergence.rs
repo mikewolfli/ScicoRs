@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Convergence control and coupling iteration scheduling.
 
 use super::bus::{CouplingInterface, FieldData, PhysicsField};

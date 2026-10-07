@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Articulated body algorithm (ABA) for recursive rigid-body dynamics.
 //!
 //! Uses the recursive Newton-Euler formulation for O(n) computation

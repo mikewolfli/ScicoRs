@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Coordinate Systems (Phase 10).
 //!
 //! Provides 1D, 2D, and 3D coordinate types in Cartesian, polar,

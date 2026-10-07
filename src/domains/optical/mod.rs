@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Optics & Photonics Simulation (Phase 18).
 //!
 //! Provides geometric optics (ray tracing, ABCD matrix), wave optics

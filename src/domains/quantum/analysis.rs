@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Quantum analysis tools: fidelity, trace distance, entanglement entropy, mutual information.
 
 use super::state::{ComplexScalar, DensityMatrix, QuantumState};

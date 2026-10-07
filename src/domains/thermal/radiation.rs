@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Thermal radiation models: Stefan-Boltzmann law, radiation exchange
 //! between surfaces, and view factor calculations for common geometries.
 

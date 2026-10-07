@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Hardware-in-the-loop (HIL) support.
 //!
 //! A HIL run interleaves the simulation with an external interface: each

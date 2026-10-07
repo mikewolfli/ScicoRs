@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Topological sorting and cycle detection for simulation diagrams.
 //!
 //! Provides Kahn's algorithm for topological ordering of blocks in a diagram

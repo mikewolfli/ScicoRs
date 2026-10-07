@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Core Data Model Layer
 //!
 //! The foundational data-model layer of the simulation kernel. Defines the
@@ -22,6 +24,7 @@
 //! - **DiagramValidate**: diagram validation rules
 //! - **Coord** (Phase 10): coordinate systems (fully implemented — 1D/2D/3D, Cartesian/polar/cylindrical/spherical, Transform4x4)
 //! - **Units** (Phase 11): units & dimensions (fully implemented — 7 SI base dimensions, derived dimensions, Unit/Quantity with conversion)
+//! - **Mesh** (Phase 37): mesh topology, named regions, validation, fields and adaptation
 
 pub mod block;
 pub mod component;
@@ -34,6 +37,7 @@ pub mod diagram_validate;
 pub mod error;
 pub mod io;
 pub mod link;
+pub mod mesh;
 pub mod param;
 pub mod port;
 pub mod signal;
@@ -52,6 +56,10 @@ pub use diagram_validate::{ValidationResult, validate_diagram};
 pub use error::{ErrorCode, SimError};
 pub use io::{IODeclaration, InputDecl, OutputDecl};
 pub use link::Link;
+pub use mesh::{
+    Element, ElementType, FieldData, FieldLocation, MappingMethod, MappingReport, MeshDimension,
+    MeshError, MeshErrorKind, MeshLocation, MeshTopology, Region, RegionRegistry,
+};
 pub use param::{ExpressionParameter, Parameter, ParameterSet};
 pub use port::Port;
 pub use signal::{BusSignal, ContinuousSignal, DiscreteSignal, EventSignal, Signal};

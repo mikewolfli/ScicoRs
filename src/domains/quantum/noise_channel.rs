@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Quantum noise channel models.
 //!
 //! Provides common noise channels (depolarising, amplitude/phase damping,

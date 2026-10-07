@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Semiconductor Device Physics / TCAD Simulation (Phase 13).
 //!
 //! Provides transistor-level physics models for semiconductor device

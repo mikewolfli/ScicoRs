@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Convective heat transfer models for natural and forced convection.
 //!
 //! Provides Nusselt number correlations for natural convection (vertical

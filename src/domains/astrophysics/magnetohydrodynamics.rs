@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Magnetohydrodynamics (MHD) simulation for astrophysical plasmas.
 //!
 //! Provides a 2D ideal MHD solver using the finite-volume method with

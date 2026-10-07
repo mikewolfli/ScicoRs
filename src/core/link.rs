@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Link: a directed signal connection between two ports.
 //!
 //! Links carry signals from a source (output) port to a destination (input) port.

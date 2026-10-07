@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Electromagnetic Field & RF/Microwave Simulation (Phase 22).
 //!
 //! Provides Maxwell equation-based models: electrostatic/magnetostatic fields,

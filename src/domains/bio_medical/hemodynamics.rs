@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Hemodynamics: vessel flow resistance, cardiac electrophysiology, Windkessel model.
 
 use crate::core::types::Scalar;

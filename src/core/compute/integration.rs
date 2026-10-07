@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Numerical integration (quadrature) methods.
 //!
 //! Provides trapezoidal, Simpson's, and Gauss-Legendre quadrature for

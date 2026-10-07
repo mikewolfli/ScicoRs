@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Circuit analysis types and algorithms.
 //!
 //! Provides DC operating point, DC sweep, AC small-signal sweep,

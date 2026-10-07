@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! General Numerical Solver System (Phase 3)
 //!
 //! Provides a comprehensive suite of numerical solvers for the simulation kernel:

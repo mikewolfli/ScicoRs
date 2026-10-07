@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Units & Dimensions System (Phase 11).
 //!
 //! Provides the 7 SI base dimensions, derived dimensions, unit

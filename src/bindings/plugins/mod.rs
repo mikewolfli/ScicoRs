@@ -1,10 +1,37 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Plugin system: manifest, trait, manager, and registries.
+//!
+//! # Sub-modules (Phase 41)
+//!
+//! * [`compatibility`] — API versioning, capability declaration and the
+//!   compatibility policy applied *before* a plugin is loaded.
+//! * [`diagnostics`] — load/init/run failure context that attributes a fault to
+//!   a specific `(plugin, entry, version, stage)` and keeps a failed plugin
+//!   from polluting other plugins or global state.
+//!
+//! # Execution model (important)
+//!
+//! Dynamic-library plugins are loaded and executed **in-process**. This is a
+//! performance and integration choice, **not a security sandbox**: a plugin runs
+//! with the full privileges of the host process and can corrupt or crash it.
+//! Only load plugins whose origin you trust.
+
+pub mod compatibility;
+pub mod diagnostics;
+
+pub use compatibility::{
+    ApiVersion, Capability, CompatDecision, CompatibilityPolicy, ExtendedManifest,
+    PlatformRequirement, SourcePolicy, check_compatibility, compatibility_of_manifest,
+    detect_conflicts,
+};
+pub use diagnostics::{PluginContribution, PluginFailure, PluginLoader, PluginStage, StagedPlugin};
 
 use crate::core::block::Block;
 use std::collections::HashMap;
 
 /// Plugin manifest metadata.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PluginManifest {
     pub name: String,
     pub version: String,

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Workflow engine — orchestrates pipeline stage execution.
 //!
 //! The workflow engine takes a DAG of tasks, decomposes it into pipeline

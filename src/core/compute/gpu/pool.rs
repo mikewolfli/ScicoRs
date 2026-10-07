@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! A small, persistent GPU buffer pool.
 //!
 //! Every launch needs three or four buffers, and creating them per call was the

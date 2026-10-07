@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Astrophysics & Celestial Orbit Simulation (Phase 31).
 //!
 //! Provides celestial body models, orbital mechanics (Keplerian elements,

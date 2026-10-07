@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! Flow analysis: basic fluid flow computations.
 //!
 //! Provides utility functions for computing volumetric and mass flow rates,

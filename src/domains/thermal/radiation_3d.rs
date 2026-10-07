@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 //! 3D thermal radiation solver using the Discrete Ordinates Method (DOM).
 //!
 //! Solves the radiative transfer equation (RTE) for participating media

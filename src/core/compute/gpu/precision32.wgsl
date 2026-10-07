@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 Mike Li/Mikewolfli/Wei Li(mikewolfli@163.com)
+// SPDX-License-Identifier: MIT
 // SCIcoRS GPU kernels — WGSL compute shaders (float32 storage path).
 //
 // Included via `include_str!` from `gpu/kernel.rs`. **Important portability

@@ -245,7 +245,25 @@ Legend: ✅ implemented & tested | ⬜ not implemented
 | NEW | Pure-Rust SIMD fast path (matrixmultiply) — real acceleration | 100% ✅ |
 | NEW | Dense O(n³) solve acceleration (vectorized + blocked Cholesky + LU inverse) | 100% ✅ |
 | NEW | FFT twiddle table + Blocked CGS2 QR | 100% ✅ |
+| BLUE13 §35 | Sparse linear algebra (COO/CSR/CSC, CG/MINRES/GMRES/BiCGSTAB, ILU(0), least squares) | 100% ✅ (2026-10-07) |
+| BLUE13 §36 | Sensitivity / calibration / uncertainty / optimization (`src/analysis/`) | 100% ✅ (2026-10-07) |
+| BLUE13 §37 | Mesh, boundary regions and field workflow (`src/core/mesh/`) | 100% ✅ (2026-10-07) |
+| BLUE13 §38 | Checkpoints and elastic execution (`runtime/checkpoint`, `runtime/execution`) | 100% ✅ (2026-10-07) |
+| BLUE13 §39 | Self-describing result datasets (`postproc/dataset`) | 100% ✅ (2026-10-07) |
+| BLUE13 §40 | Numerical validation & convergence studies (`src/validation/`) | 100% ✅ (2026-10-07) |
+| BLUE13 §41 | CLI toolchain, C ABI, plugin compatibility (`src/cli`, `bindings`) | 100% ✅ (2026-10-07) |
+| BLUE13 rec. | Real-solver validation example (`examples/validation_study.rs`) | 100% ✅ (2026-10-07) |
+| BLUE13 rec. | `scico` CLI binary (`src/bin/scico.rs`) with end-to-end workflow | 100% ✅ (2026-10-07) |
+| BLUE13 rec. | GPU feature build/clippy/test verified | 100% ✅ (2026-10-07) |
 
 **Quality gates:** `cargo build` ✅ · `cargo clippy --all-targets -- -D warnings` zero ✅ ·
-`cargo test` 1898 lib + 2 doc-tests, 0 failed, 0 ignored ✅ · no `todo!()`/`unimplemented!()`/empty
-stubs in production code ✅ · English comments ✅
+`cargo fmt --check` ✅ · `cargo test --all-targets` **2529 passed, 0 failed, 0 ignored** ✅ ·
+`cargo clippy --features gpu --all-targets -- -D warnings` zero, `cargo test --features gpu --lib`
+**2563 passed, 0 failed** ✅ · `cargo run --example validation_study` → 3 passed / 0 failed / 1 n-a ✅ ·
+no `todo!()`/`unimplemented!()`/empty stubs in production code ✅ · English comments ✅ · all files < 2000 lines ✅
+
+**BLUE13 detail:** see `docs/log/log20261007-1.md`. All seven phases (35–41) implemented and verified
+with two independent read-only audits; the one critical finding (a checkpoint crash window) was fixed with a
+regression test proving resume-after-crash preserves the last valid checkpoint. The three recommended
+follow-ups (GPU build verification, a real solver wired into the validation toolkit, and a real `scico`
+CLI binary) are also implemented and exercised end-to-end.
